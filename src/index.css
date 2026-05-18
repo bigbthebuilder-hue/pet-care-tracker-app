@@ -1,12 +1,12 @@
 :root {
-  --text: #544236;
-  --text-h: #211816;
-  --bg: #ffffff;
-  --border: #e5e4e7;
+  --text: #1f2937;
+  --text-h: #08153a;
+  --bg: linear-gradient(180deg,#fffaf3 0%,#f8fbff 52%,#eef8ff 100%);
+  --border: #dbeafe;
   --code-bg: #f4f3ec;
-  --accent: #d9783f;
-  --accent-bg: rgba(217, 120, 63, 0.10);
-  --accent-border: rgba(217, 120, 63, 0.42);
+  --accent: #0f62fe;
+  --accent-bg: rgba(15, 98, 254, 0.10);
+  --accent-border: rgba(15, 98, 254, 0.42);
   --social-bg: rgba(244, 243, 236, 0.5);
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
@@ -311,3 +311,9 @@ button[style*="background: rgb(217, 120, 63)"]:hover:not(:disabled),
 button[style*="#d9783f"]:hover:not(:disabled) {
   box-shadow: 0 12px 24px rgba(217, 120, 63, 0.24);
 }
+
+/* V14 visual base: bright blue / lime / coral direction */
+button { transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease; }
+button:active { transform: scale(.97); }
+a[href^="tel:"] { touch-action: manipulation; }
+@keyframes softPulse { 0%,100% { box-shadow: 0 8px 18px rgba(15,98,254,.16); } 50% { box-shadow: 0 12px 28px rgba(15,98,254,.28); } }

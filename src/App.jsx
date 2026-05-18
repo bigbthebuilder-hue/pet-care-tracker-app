@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 
-const VERSION = "";
+const VERSION = "PET_CARE_V15_PHONE_FIRST_VISUAL_REBUILD";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
@@ -524,7 +524,8 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
         <div style={S.row}><button style={S.primaryBtn} onClick={()=>onSaveOwner(ownerForm)}>Save Owner</button></div>
       </Panel>}
 
-      {selectedOwnerId && <Panel title={selectedOwner?.name || "Selected Owner"}>
+      {selectedOwnerId && <Panel title="">
+        <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
         <div style={S.subTabs}>{OWNER_TABS.map(t=><button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}>{t}</button>)}</div>
 
         {ownerTab === "Owner Info" && <div style={S.stack}>
@@ -992,29 +993,53 @@ function CompleteModal({ visit, checklist, owner, pets, service, onToggleCheckli
   </div></Modal>;
 }
 
+
+function cleanPhoneHref(phone) {
+  const raw = String(phone || "").trim();
+  if (!raw) return "";
+  const cleaned = raw.replace(/[^0-9+]/g, "");
+  return cleaned ? `tel:${cleaned}` : "";
+}
+function PhoneAction({ label = "Call", phone }) {
+  const href = cleanPhoneHref(phone);
+  if (!href) return null;
+  return <a style={S.callBtn} href={href}>{label}</a>;
+}
+function PhoneInfoLine({ label, name, phone, danger=false }) {
+  const hasName = !!String(name || "").trim();
+  const hasPhone = !!String(phone || "").trim();
+  if (!hasName && !hasPhone) return null;
+  return <div style={danger?S.infoDanger:S.info}>
+    <b>{label}</b>
+    {hasName && <div>{name}</div>}
+    {hasPhone && <div style={S.phoneRow}><a style={S.phoneLink} href={cleanPhoneHref(phone)}>{phone}</a><PhoneAction label="Call" phone={phone} /></div>}
+  </div>;
+}
+
 function PetInfoModal({ pet, owner, vetClinic, onClose }) {
   if (!pet) {
     return <Modal onClose={onClose} title="Pet Info"><Empty text="Pet information is not available for this visit." /></Modal>;
   }
-  const ownerContact = [owner?.name, owner?.phone].filter(Boolean).join(" — ");
-  const ownerEmergency = [owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — ");
+  const ownerContact = owner?.name || "";
+  const ownerPhone = owner?.phone || "";
+  const ownerEmergencyName = owner?.emergency_contact_name || "";
+  const ownerEmergencyPhone = owner?.emergency_contact_phone || "";
   const vetName = vetClinic?.clinic_name || pet.vet_name || pet.emergency_vet;
   const vetPhone = vetClinic?.phone || pet.vet_phone;
   const vetEmergency = vetClinic?.emergency_phone || pet.emergency_vet;
   return <Modal onClose={onClose} title={`${pet.name || "Pet"} — Emergency & Care Info`}>
     <div style={S.petInfo}>
-      {pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No pet photo</div>}
-      <h2 style={{margin:"4px 0"}}>{pet.name || "Pet"}</h2>
+      <PetHero pet={pet} />
       <p style={S.muted}>{[pet.species, pet.breed, pet.color_description].filter(Boolean).join(" · ")}</p>
       <div style={S.infoGrid}>
-        <InfoLine label="Owner" value={ownerContact} />
-        <InfoLine label="Owner emergency contact" value={ownerEmergency} danger />
+        <PhoneInfoLine label="Owner" name={ownerContact} phone={ownerPhone} />
+        <PhoneInfoLine label="Owner emergency contact" name={ownerEmergencyName} phone={ownerEmergencyPhone} danger />
         <InfoLine label="Access instructions" value={owner?.access_instructions} danger />
         <InfoLine label="House instructions" value={owner?.house_instructions} />
         <InfoLine label="Vet clinic" value={vetName} danger />
-        <InfoLine label="Vet phone" value={vetPhone} danger />
+        <PhoneInfoLine label="Vet phone" phone={vetPhone} danger />
         <InfoLine label="Vet address" value={vetClinic?.address} />
-        <InfoLine label="Emergency / after-hours vet" value={vetEmergency} danger />
+        <PhoneInfoLine label="Emergency / after-hours vet" phone={vetEmergency} danger />
         <InfoLine label="Medical conditions" value={pet.medical_conditions} danger />
         <InfoLine label="Allergies" value={pet.allergies} danger />
         <InfoLine label="Emergency instructions" value={pet.emergency_instructions} danger />
@@ -1031,32 +1056,64 @@ function PetInfoModal({ pet, owner, vetClinic, onClose }) {
 }
 
 function Modal({ title, children, onClose }) { return <div style={S.modalShade}><div style={S.modal}><div style={S.modalHead}><h2>{title}</h2><button style={S.ghostBtn} onClick={onClose}>Close</button></div>{children}</div></div>; }
-function Panel({ title, children }) { return <div style={S.card}><h2>{title}</h2>{children}</div>; }
+function Panel({ title, children }) { return <div style={S.card}>{title ? <h2>{title}</h2> : null}{children}</div>; }
 function Metric({ title, value, sub }) { return <div style={S.metric}><span>{title}</span><b>{value}</b><small>{sub}</small></div>; }
 function Empty({ text }) { return <p style={S.muted}>{text}</p>; }
 function Field({ label, children }) { return <label style={S.field}><span>{label}</span>{children}</label>; }
 function visitPetsFor(visit, visitPets, petMapOrPets) { const map = Array.isArray(petMapOrPets) ? Object.fromEntries(petMapOrPets.map(p=>[p.id,p])) : petMapOrPets; const rows = visitPets.filter(vp=>vp.visit_id===visit.id).map(vp=>map[vp.pet_id]).filter(Boolean); if(rows.length) return rows; return visit.primary_pet_id && map[visit.primary_pet_id] ? [map[visit.primary_pet_id]] : []; }
 function InfoLine({ label, value, danger=false }) { if (!value && value !== 0) return null; return <div style={danger?S.infoDanger:S.info}><b>{label}</b><div>{String(value)}</div></div>; }
+function OwnerHero({ owner, onEdit }) {
+  if (!owner) return null;
+  return <div style={S.ownerHero}>
+    <div style={S.ownerAvatar}>🐾</div>
+    <div style={S.ownerHeroText}>
+      <b>{owner.name || "Selected owner"}</b>
+      <span>{owner.phone || owner.email || "No contact info"}</span>
+      {owner.address ? <small>{owner.address}</small> : null}
+    </div>
+    <button style={S.heroEditBtn} onClick={onEdit}>Edit</button>
+  </div>;
+}
 function OwnerSummary({ owner }) {
   if (!owner) return <Empty text="Choose an owner or create a new one." />;
   return <div style={S.infoGrid}>
-    <InfoLine label="Phone" value={owner.phone} />
+    <PhoneInfoLine label="Phone" phone={owner.phone} />
     <InfoLine label="Email" value={owner.email} />
     <InfoLine label="Invoice email" value={owner.invoice_email} />
     <InfoLine label="Address" value={owner.address} />
-    <InfoLine label="Emergency contact" value={[owner.emergency_contact_name, owner.emergency_contact_phone].filter(Boolean).join(" — ")} danger />
+    <PhoneInfoLine label="Emergency contact" name={owner.emergency_contact_name} phone={owner.emergency_contact_phone} danger />
         <InfoLine label="Access instructions" value={owner.access_instructions} danger />
     <InfoLine label="House instructions" value={owner.house_instructions} />
     <InfoLine label="Billing notes" value={owner.billing_notes} />
     <InfoLine label="Notes" value={owner.notes} />
   </div>;
 }
+function PetHero({ pet }) {
+  if (!pet) return null;
+  const bg = pet.photo_url ? { backgroundImage: `linear-gradient(180deg, rgba(8,21,58,0.05) 0%, rgba(8,21,58,0.32) 45%, rgba(8,21,58,0.88) 100%), url(${pet.photo_url})` } : {};
+  return <div style={{...S.petHero, ...bg}}>
+    {!pet.photo_url && <div style={S.photoBlank}>No pet photo yet</div>}
+    <div style={S.petHeroText}>
+      <b>{petFace(pet)} {pet.name || "Pet"}</b>
+      <span>{[pet.species, pet.breed, pet.age_text].filter(Boolean).join(" · ") || "Pet profile"}</span>
+    </div>
+  </div>;
+}
 function PetReadOnly({ pet, petTab, visits, serviceMap, visitPets, petMap, petChecklist, vetClinics = [] }) {
   if (!pet) return <Empty text="Choose a pet or add a new pet." />;
   const vetClinic = vetClinics.find(v => v.id === pet.vet_clinic_id);
-  if (petTab === "Profile") return <div style={S.infoGrid}>{pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No photo</div>}<InfoLine label="Name" value={pet.name} /><InfoLine label="Species" value={pet.species} /><InfoLine label="Breed" value={pet.breed} /><InfoLine label="Color / description" value={pet.color_description} /><InfoLine label="Age" value={pet.age_text} /><InfoLine label="Weight" value={pet.weight} /><InfoLine label="Sex" value={pet.sex} /><InfoLine label="Spayed / neutered" value={pet.spayed_neutered} /></div>;
+  if (petTab === "Profile") return <div style={S.infoGrid}>
+    <PetHero pet={pet} />
+    <InfoLine label="Species" value={pet.species} />
+    <InfoLine label="Breed" value={pet.breed} />
+    <InfoLine label="Color / description" value={pet.color_description} />
+    <InfoLine label="Age" value={pet.age_text} />
+    <InfoLine label="Weight" value={pet.weight} />
+    <InfoLine label="Sex" value={pet.sex} />
+    <InfoLine label="Spayed / neutered" value={pet.spayed_neutered} />
+  </div>;
   if (petTab === "Care") return <div style={S.infoGrid}><InfoLine label="Feeding instructions" value={pet.feeding_instructions} /><InfoLine label="Medication instructions" value={pet.medication_instructions} danger /><InfoLine label="Behavior notes" value={pet.behavior_notes} /><InfoLine label="Leash / harness notes" value={pet.leash_harness_notes} /><InfoLine label="Favorite things" value={pet.favorite_things} /><InfoLine label="Hide spots" value={pet.hide_spots} /><InfoLine label="Care notes" value={pet.care_notes} /></div>;
-  if (petTab === "Emergency") return <div style={S.infoGrid}><InfoLine label="Medical conditions" value={pet.medical_conditions} danger /><InfoLine label="Allergies" value={pet.allergies} danger /><InfoLine label="Vet clinic" value={vetClinic?.clinic_name || pet.vet_name} /><InfoLine label="Vet phone" value={vetClinic?.phone || pet.vet_phone} danger /><InfoLine label="Vet address" value={vetClinic?.address} /><InfoLine label="Emergency / after-hours vet" value={vetClinic?.emergency_phone || pet.emergency_vet} danger /><InfoLine label="Emergency instructions" value={pet.emergency_instructions} danger /></div>;
+  if (petTab === "Emergency") return <div style={S.infoGrid}><InfoLine label="Medical conditions" value={pet.medical_conditions} danger /><InfoLine label="Allergies" value={pet.allergies} danger /><InfoLine label="Vet clinic" value={vetClinic?.clinic_name || pet.vet_name} /><PhoneInfoLine label="Vet phone" phone={vetClinic?.phone || pet.vet_phone} danger /><InfoLine label="Vet address" value={vetClinic?.address} /><PhoneInfoLine label="Emergency / after-hours vet" phone={vetClinic?.emergency_phone || pet.emergency_vet} danger /><InfoLine label="Emergency instructions" value={pet.emergency_instructions} danger /></div>;
   if (petTab === "Checklist") return <div style={S.stack}>{petChecklist.filter(i=>i.pet_id===pet.id).length ? <ul>{petChecklist.filter(i=>i.pet_id===pet.id).map(i=><li key={i.id}>{i.label}</li>)}</ul> : <Empty text="No pet-specific checklist items yet." />}</div>;
   return <div style={S.stack}>{visits.length ? visits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} />) : <Empty text="No visit history for this pet yet." />}</div>;
 }
@@ -1204,9 +1261,129 @@ function petButtonStyle(pet, active) {
   if (species.includes("cat")) return active ? S.petPickCatActive : S.petPickCat;
   return active ? S.petPickOtherActive : S.petPickOther;
 }
-function PetMini({ pet, active, onClick, onInfo }) { return <div style={active?S.petCardActive:S.petCard} onClick={onClick}>{pet.photo_url ? <img src={pet.photo_url} style={S.petPhoto} /> : <div style={S.photoSmall}>{petFace(pet)}</div>}<b>{petFace(pet)} {pet.name}</b><small>{pet.species} · {pet.breed}</small><div style={S.row}><button style={S.secondaryMini} onClick={(e)=>{e.stopPropagation(); onInfo();}}>Info</button></div></div>; }
+function PetMini({ pet, active, onClick, onInfo }) {
+  const hasPhoto = !!pet.photo_url;
+  const bg = hasPhoto ? { backgroundImage: `linear-gradient(180deg, rgba(8,21,58,0.12) 0%, rgba(8,21,58,0.35) 45%, rgba(8,21,58,0.86) 100%), url(${pet.photo_url})` } : {};
+  return <button type="button" style={{...(active?S.petPhotoCardActive:S.petPhotoCard), ...bg}} onClick={onClick}>
+    {!hasPhoto && <div style={S.photoSmall}>{petFace(pet)}</div>}
+    <div style={S.petPhotoOverlay}>
+      <b>{petFace(pet)} {pet.name || "Pet"}</b>
+      <small>{[pet.species, pet.breed].filter(Boolean).join(" · ") || "Pet profile"}</small>
+      <span style={S.petPhotoCardHint}>{active ? "Selected" : "Tap to select"}</span>
+    </div>
+    <span style={S.petCardInfoBtn} onClick={(e)=>{e.stopPropagation(); onInfo();}}>Info</span>
+  </button>;
+}
 
 const S = {
-  app:{minHeight:"100svh",background:"linear-gradient(180deg,#ffffff 0%,#fffdf9 46%,#f8fbff 100%)",color:"#1f2937",paddingBottom:92,fontFamily:"system-ui,Segoe UI,Roboto,sans-serif"},
-  header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"10px 12px 4px",maxWidth:720,margin:"0 auto"}, kicker:{display:"none"}, title:{fontSize:26,margin:0,fontWeight:850,color:"#211816",lineHeight:1.05}, main:{maxWidth:720,margin:"0 auto",padding:"8px 10px 30px",overflowX:"hidden"}, stack:{display:"grid",gap:14}, grid3:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}, twoCol:{display:"grid",gridTemplateColumns:"1fr",gap:12}, twoColBalanced:{display:"grid",gridTemplateColumns:"1fr",gap:12}, subTabs:{display:"flex",gap:8,flexWrap:"wrap",margin:"8px 0 14px"}, subTab:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"9px 12px",fontWeight:800}, subTabActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"9px 12px",fontWeight:900,color:"#763b15"}, detailBox:{border:"1px solid #eee4dc",borderRadius:20,padding:14,background:"#fff",display:"grid",gap:12,boxShadow:"0 8px 20px rgba(70,50,35,.035)"}, infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:8}, visitHistory:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, card:{background:"rgba(255,255,255,.98)",border:"1px solid #eee4dc",borderRadius:22,padding:16,boxShadow:"0 12px 28px rgba(70,50,35,.055)",textAlign:"left"}, metric:{background:"#fff",border:"1px solid #eee4dc",borderRadius:20,padding:16,textAlign:"left",boxShadow:"0 10px 20px rgba(70,50,35,.045)",display:"grid",gap:3}, muted:{color:"#6b7280"}, error:{maxWidth:1180,margin:"8px auto",padding:12,borderRadius:14,background:"#fff1f2",color:"#9f1239",textAlign:"left"}, toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#15251d",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"}, saving:{position:"fixed",right:16,bottom:95,background:"#111827",color:"#fff",padding:"10px 14px",borderRadius:14,zIndex:60}, bottomNav:{position:"fixed",bottom:0,left:0,right:0,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"8px 8px calc(8px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.97)",borderTop:"1px solid #eee4dc",backdropFilter:"blur(14px)",zIndex:40,boxShadow:"0 -12px 30px rgba(70,50,35,.07)"}, navBtn:{border:"1px solid #eadfd6",background:"#fff",borderRadius:16,padding:"12px 4px",fontWeight:850,color:"#6b5b50",fontSize:14,boxShadow:"0 4px 10px rgba(70,50,35,.035)"}, navActive:{border:"1px solid #d99058",background:"#fff2e8",borderRadius:16,padding:"12px 4px",fontWeight:900,color:"#763b15",fontSize:14,boxShadow:"0 8px 16px rgba(217,144,88,.2)"}, primaryBtn:{border:0,background:"linear-gradient(180deg,#df854d,#c9652f)",color:"#fff",borderRadius:16,padding:"12px 16px",fontWeight:900,boxShadow:"0 10px 18px rgba(217,120,63,.20)"}, secondaryBtn:{border:"1px solid #d9c7b8",background:"#fff",color:"#53392a",borderRadius:16,padding:"11px 14px",fontWeight:800}, ghostBtn:{border:"1px solid #e4d6c9",background:"rgba(255,255,255,.65)",borderRadius:14,padding:"10px 12px",fontWeight:800}, refreshBtn:{border:"1px solid #e4d6c9",background:"rgba(255,255,255,.75)",borderRadius:999,padding:"7px 10px",fontWeight:900,fontSize:18,minWidth:42}, dangerBtn:{border:0,background:"#b91c1c",color:"#fff",borderRadius:16,padding:"11px 14px",fontWeight:800}, primaryMini:{border:0,background:"linear-gradient(180deg,#df854d,#c9652f)",color:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800,boxShadow:"0 8px 14px rgba(217,120,63,.16)"}, secondaryMini:{border:"1px solid #d9c7b8",background:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800}, dangerMini:{border:0,background:"#fee2e2",color:"#991b1b",borderRadius:12,padding:"8px 10px",fontWeight:800}, formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:10}, formGridPadded:{display:"grid",gridTemplateColumns:"1fr",gap:10,padding:"0 14px 14px"}, field:{display:"grid",gap:5,fontWeight:800,color:"#544236"}, check:{display:"flex",gap:8,alignItems:"center",fontWeight:750}, compactChecklist:{display:"grid",gap:8}, checkCompact:{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:10,alignItems:"center",fontWeight:800,textAlign:"left"}, checkboxSmall:{width:18,height:18,minHeight:18,margin:0,padding:0}, row:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}, list:{display:"grid",gap:8,maxHeight:420,overflow:"auto"}, listBtn:{textAlign:"left",border:"1px solid #eadfd6",background:"#fff",borderRadius:15,padding:12,display:"grid",gap:3}, listActive:{textAlign:"left",border:"1px solid #d99058",background:"#fff2e8",borderRadius:15,padding:12,display:"grid",gap:3}, petCards:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}, petCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:18,padding:12,display:"grid",gap:7}, petCardActive:{border:"2px solid #d9783f",background:"#fff7ef",borderRadius:18,padding:12,display:"grid",gap:7}, petPhoto:{width:62,height:62,borderRadius:18,objectFit:"cover"}, petPhotoBig:{width:"100%",maxHeight:260,borderRadius:22,objectFit:"cover"}, photoSmall:{width:62,height:62,borderRadius:18,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900,fontSize:26}, photoBlank:{height:140,borderRadius:20,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900}, selectedPetNotice:{border:"1px solid #eadfd6",background:"#fffaf6",borderRadius:14,padding:"10px 12px",fontWeight:850,color:"#53392a",textAlign:"left"}, petPickWrap:{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0"}, petPickDog:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickDogActive:{border:"2px solid #d9783f",background:"#fff2e8",color:"#763b15",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(217,120,63,.18)"}, petPickCat:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickCatActive:{border:"2px solid #8b5cf6",background:"#f5f3ff",color:"#4c1d95",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(139,92,246,.15)"}, petPickOther:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickOtherActive:{border:"2px solid #059669",background:"#ecfdf5",color:"#065f46",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(5,150,105,.14)"}, pickBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, pickActive:{border:"1px solid #d9783f",background:"#fff2e8",color:"#763b15",borderRadius:999,padding:"10px 13px",fontWeight:900}, cards:{display:"grid",gridTemplateColumns:"1fr",gap:10,marginTop:10}, smallCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:17,padding:12,display:"grid",gap:5}, visitCard:{border:"1px solid #eee4dc",borderRadius:18,padding:13,display:"grid",gridTemplateColumns:"1fr",gap:10,alignItems:"start",marginTop:10,background:"#fff",boxShadow:"0 8px 18px rgba(70,50,35,.045)"}, cardActions:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,alignItems:"stretch",width:"100%"}, moreActions:{border:"1px solid #f0e4da",borderRadius:14,background:"#fffaf6",padding:0}, moreSummary:{listStyle:"none",cursor:"pointer",padding:"10px 12px",fontWeight:900,color:"#6b4b39"}, moreActionBody:{display:"grid",gridTemplateColumns:"1fr",gap:8,padding:"0 10px 10px"}, petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}, petChip:{border:0,background:"#e9f7ef",borderRadius:999,padding:"6px 9px",fontWeight:800,color:"#14532d"}, status:{fontSize:12,fontWeight:900,color:"#6b7280"}, officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}, officeBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, officeActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"10px 13px",fontWeight:900}, reportRow:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,alignItems:"center",borderBottom:"1px solid #f0e4da",padding:"10px 0"}, billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, checklistRow:{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:10,alignItems:"center",border:"1px solid #f0e4da",borderRadius:12,padding:10,background:"#fff"}, subList:{gridColumn:"1/-1",display:"flex",gap:6,flexWrap:"wrap",color:"#6b7280"}, modalShade:{position:"fixed",inset:0,background:"rgba(30,20,10,.38)",zIndex:80,display:"grid",placeItems:"center",padding:14}, modal:{width:"min(900px,100%)",maxHeight:"88svh",overflow:"auto",background:"#fff",borderRadius:24,padding:16,boxShadow:"0 30px 80px rgba(0,0,0,.25)",textAlign:"left"}, modalHead:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",borderBottom:"1px solid #eee",paddingBottom:10,marginBottom:12}, photoPickerBox:{border:"1px solid #eadfd6",borderRadius:20,padding:12,background:"#fff",display:"grid",gap:10}, petInfo:{display:"grid",gap:10}, info:{border:"1px solid #e5e7eb",borderRadius:14,padding:12,background:"#fff"}, infoDanger:{border:"1px solid #fecaca",borderRadius:14,padding:12,background:"#fff1f2"}, collapse:{border:"1px solid #eadfd6",borderRadius:16,padding:0,background:"#fff"}, collapseSummary:{listStyle:"none",cursor:"pointer",padding:"13px 14px",fontWeight:900,color:"#53392a"},
+  app:{minHeight:"100svh",background:"radial-gradient(circle at top left,rgba(15,98,254,.10),transparent 280px),radial-gradient(circle at 80% 20%,rgba(255,51,102,.08),transparent 240px),linear-gradient(180deg,#fffaf2 0%,#ffffff 46%,#f5fbff 100%)",color:"#08153a",paddingBottom:94,fontFamily:"system-ui,Segoe UI,Roboto,sans-serif"},
+  header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"18px 14px 8px",maxWidth:430,margin:"0 auto"},
+  kicker:{display:"none"},
+  title:{fontSize:26,margin:0,fontWeight:950,color:"#071746",lineHeight:1.02,letterSpacing:"-1.1px"},
+  main:{maxWidth:430,margin:"0 auto",padding:"8px 10px 36px",overflowX:"hidden"},
+  stack:{display:"grid",gap:14},
+  grid3:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  twoCol:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  twoColBalanced:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  card:{background:"rgba(255,255,255,.96)",border:"1px solid rgba(191,219,254,.85)",borderRadius:26,padding:16,boxShadow:"0 18px 48px rgba(8,21,58,.08)",textAlign:"left",overflow:"hidden"},
+  metric:{background:"linear-gradient(145deg,#ffffff,#f8fbff)",border:"1px solid rgba(191,219,254,.95)",borderRadius:24,padding:17,textAlign:"left",boxShadow:"0 14px 34px rgba(8,21,58,.075)",display:"grid",gap:4},
+  muted:{color:"#64748b"},
+  error:{maxWidth:430,margin:"8px auto",padding:12,borderRadius:16,background:"#fff1f2",color:"#9f1239",textAlign:"left"},
+  toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#071746",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"},
+  saving:{position:"fixed",right:16,bottom:95,background:"#071746",color:"#fff",padding:"10px 14px",borderRadius:16,zIndex:60},
+  bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"min(100%,430px)",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"8px 8px calc(8px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.94)",borderTop:"1px solid rgba(191,219,254,.9)",borderLeft:"1px solid rgba(191,219,254,.55)",borderRight:"1px solid rgba(191,219,254,.55)",borderRadius:"24px 24px 0 0",backdropFilter:"blur(16px)",zIndex:40,boxShadow:"0 -18px 42px rgba(8,21,58,.12)"},
+  navBtn:{border:"1px solid rgba(191,219,254,.95)",background:"#fff",borderRadius:19,padding:"13px 4px",fontWeight:900,color:"#334155",fontSize:14,boxShadow:"0 5px 12px rgba(8,21,58,.04)"},
+  navActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#eff6ff,#ffffff)",borderRadius:19,padding:"13px 4px",fontWeight:950,color:"#0f62fe",fontSize:14,boxShadow:"0 12px 28px rgba(15,98,254,.22)"},
+  primaryBtn:{border:0,background:"linear-gradient(135deg,#0f62fe 0%,#19b7ff 45%,#2dd4bf 100%)",color:"#fff",borderRadius:18,padding:"13px 18px",fontWeight:950,boxShadow:"0 14px 28px rgba(15,98,254,.25)",minHeight:48},
+  secondaryBtn:{border:"1px solid #bfdbfe",background:"#fff",color:"#071746",borderRadius:18,padding:"12px 15px",fontWeight:900,minHeight:46},
+  ghostBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.72)",borderRadius:16,padding:"10px 13px",fontWeight:900},
+  refreshBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.80)",borderRadius:999,padding:"8px 11px",fontWeight:950,fontSize:18,minWidth:44,boxShadow:"0 12px 24px rgba(8,21,58,.08)"},
+  dangerBtn:{border:0,background:"#e11d48",color:"#fff",borderRadius:18,padding:"12px 15px",fontWeight:900},
+  primaryMini:{border:0,background:"linear-gradient(135deg,#0f62fe,#2dd4bf)",color:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900,boxShadow:"0 9px 16px rgba(15,98,254,.18)"},
+  secondaryMini:{border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900},
+  dangerMini:{border:0,background:"#ffe4e6",color:"#be123c",borderRadius:14,padding:"9px 11px",fontWeight:900},
+  formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  formGridPadded:{display:"grid",gridTemplateColumns:"1fr",gap:12,padding:"0 14px 14px"},
+  field:{display:"grid",gap:6,fontWeight:900,color:"#4b3529"},
+  check:{display:"flex",gap:8,alignItems:"center",fontWeight:800},
+  compactChecklist:{display:"grid",gap:9},
+  checkCompact:{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:10,alignItems:"center",fontWeight:850,textAlign:"left"},
+  checkboxSmall:{width:18,height:18,minHeight:18,margin:0,padding:0},
+  row:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"},
+  splitRow:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"},
+  list:{display:"grid",gap:9,maxHeight:260,overflow:"auto"},
+  listBtn:{textAlign:"left",border:"1px solid #dbeafe",background:"#fff",borderRadius:18,padding:13,display:"grid",gap:3},
+  listActive:{textAlign:"left",border:"1px solid #0f62fe",background:"linear-gradient(145deg,#eff6ff,#fff7ed)",borderRadius:18,padding:13,display:"grid",gap:3,boxShadow:"0 10px 24px rgba(15,98,254,.13)"},
+  subTabs:{display:"flex",gap:8,flexWrap:"nowrap",overflowX:"auto",margin:"10px -4px 14px",padding:"2px 4px 8px",scrollbarWidth:"none"},
+  subTab:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900,whiteSpace:"nowrap"},
+  subTabActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:999,padding:"10px 13px",fontWeight:950,color:"#0f62fe",whiteSpace:"nowrap",boxShadow:"0 8px 18px rgba(15,98,254,.18)"},
+  detailBox:{border:"1px solid #dbeafe",borderRadius:24,padding:14,background:"#fff",display:"grid",gap:12,boxShadow:"0 12px 30px rgba(8,21,58,.055)"},
+  infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:9},
+  info:{border:"1px solid #e5e7eb",borderRadius:17,padding:13,background:"#fff"},
+  infoDanger:{border:"1px solid #fecaca",borderRadius:17,padding:13,background:"#fff1f2"},
+  ownerHero:{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:12,alignItems:"center",margin:"-4px 0 12px",padding:14,borderRadius:24,background:"linear-gradient(135deg,#0f62fe,#0047d9)",color:"#fff",boxShadow:"0 18px 38px rgba(15,98,254,.24)"},
+  ownerAvatar:{width:58,height:58,borderRadius:20,background:"rgba(255,255,255,.22)",display:"grid",placeItems:"center",fontSize:29},
+  ownerHeroText:{display:"grid",gap:2,minWidth:0},
+  heroEditBtn:{border:0,borderRadius:999,background:"linear-gradient(135deg,#ff4f5f,#ff2f85)",color:"#fff",fontWeight:950,padding:"9px 12px",boxShadow:"0 10px 20px rgba(255,47,133,.24)"},
+  petCards:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  petPhotoCard:{position:"relative",minHeight:190,border:"1px solid #dbeafe",borderRadius:24,padding:0,overflow:"hidden",display:"grid",alignItems:"end",background:"linear-gradient(135deg,#eff6ff,#fff7ed)",backgroundSize:"cover",backgroundPosition:"center",boxShadow:"0 14px 34px rgba(8,21,58,.08)",textAlign:"left"},
+  petPhotoCardActive:{position:"relative",minHeight:190,border:"2px solid #0f62fe",borderRadius:24,padding:0,overflow:"hidden",display:"grid",alignItems:"end",background:"linear-gradient(135deg,#eff6ff,#fff7ed)",backgroundSize:"cover",backgroundPosition:"center",boxShadow:"0 18px 42px rgba(15,98,254,.20)",textAlign:"left"},
+  petPhotoOverlay:{display:"grid",gap:3,width:"100%",padding:14,color:"#fff",background:"linear-gradient(180deg,transparent,rgba(8,21,58,.78))",textShadow:"0 2px 6px rgba(0,0,0,.4)"},
+  petPhotoCardHint:{fontSize:12,fontWeight:900,color:"#dbeafe"},
+  petCardInfoBtn:{position:"absolute",right:12,top:12,background:"rgba(255,255,255,.92)",color:"#071746",borderRadius:999,padding:"8px 11px",fontWeight:950,boxShadow:"0 8px 18px rgba(0,0,0,.16)"},
+  petCard:{border:"1px solid #dbeafe",background:"#fff",borderRadius:20,padding:12,display:"grid",gap:7},
+  petCardActive:{border:"2px solid #0f62fe",background:"#eff6ff",borderRadius:20,padding:12,display:"grid",gap:7},
+  petPhoto:{width:72,height:72,borderRadius:20,objectFit:"cover"},
+  petPhotoBig:{width:"100%",maxHeight:260,borderRadius:24,objectFit:"cover"},
+  photoSmall:{width:62,height:62,borderRadius:18,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:950,fontSize:26,margin:12},
+  photoBlank:{height:140,borderRadius:20,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:950,color:"#071746"},
+  petHero:{minHeight:250,borderRadius:28,background:"linear-gradient(135deg,#eff6ff,#f2e2d2)",backgroundSize:"cover",backgroundPosition:"center",display:"grid",alignItems:"end",overflow:"hidden",boxShadow:"0 18px 44px rgba(8,21,58,.14)",border:"1px solid rgba(191,219,254,.9)"},
+  petHeroText:{padding:18,color:"#fff",background:"linear-gradient(180deg,transparent,rgba(8,21,58,.86))",display:"grid",gap:4,textShadow:"0 2px 8px rgba(0,0,0,.48)"},
+  petInfo:{display:"grid",gap:10},
+  photoPickerBox:{border:"1px solid #dbeafe",borderRadius:22,padding:12,background:"#fff",display:"grid",gap:10},
+  selectedPetNotice:{border:"1px solid #dbeafe",background:"#f8fbff",borderRadius:16,padding:"11px 13px",fontWeight:900,color:"#0f172a",textAlign:"left"},
+  petPickWrap:{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0"},
+  petPickDog:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900,display:"inline-flex",gap:6,alignItems:"center"},
+  petPickDogActive:{border:"2px solid #0f62fe",background:"#eff6ff",color:"#0f62fe",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(15,98,254,.18)"},
+  petPickCat:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900,display:"inline-flex",gap:6,alignItems:"center"},
+  petPickCatActive:{border:"2px solid #8b5cf6",background:"#f5f3ff",color:"#4c1d95",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(139,92,246,.15)"},
+  petPickOther:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900,display:"inline-flex",gap:6,alignItems:"center"},
+  petPickOtherActive:{border:"2px solid #059669",background:"#ecfdf5",color:"#065f46",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(5,150,105,.14)"},
+  pickBtn:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900},
+  pickActive:{border:"1px solid #0f62fe",background:"#eff6ff",color:"#0f62fe",borderRadius:999,padding:"10px 13px",fontWeight:950},
+  cards:{display:"grid",gridTemplateColumns:"1fr",gap:10,marginTop:10},
+  smallCard:{border:"1px solid #dbeafe",background:"#fff",borderRadius:19,padding:13,display:"grid",gap:5},
+  visitCard:{border:"1px solid #dbeafe",borderRadius:24,padding:15,display:"grid",gridTemplateColumns:"1fr",gap:11,alignItems:"start",marginTop:10,background:"#fff",boxShadow:"0 15px 32px rgba(8,21,58,.08)",borderLeft:"6px solid #0f62fe"},
+  cardActions:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,alignItems:"stretch",width:"100%"},
+  moreActions:{border:"1px solid #dbeafe",borderRadius:16,background:"#f8fbff",padding:0},
+  moreSummary:{listStyle:"none",cursor:"pointer",padding:"11px 13px",fontWeight:950,color:"#071746"},
+  moreActionBody:{display:"grid",gridTemplateColumns:"1fr",gap:8,padding:"0 10px 10px"},
+  petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:7},
+  petChip:{border:0,background:"#dcfce7",borderRadius:999,padding:"7px 10px",fontWeight:900,color:"#14532d"},
+  status:{fontSize:12,fontWeight:950,color:"#64748b"},
+  officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8},
+  officeBtn:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"11px 13px",fontWeight:900},
+  officeActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:999,padding:"11px 13px",fontWeight:950,color:"#0f62fe"},
+  reportRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,alignItems:"center",borderBottom:"1px solid #eff6ff",padding:"11px 0"},
+  billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
+  billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
+  checklistRow:{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:10,alignItems:"center",border:"1px solid #dbeafe",borderRadius:14,padding:11,background:"#fff"},
+  subList:{gridColumn:"1/-1",display:"flex",gap:6,flexWrap:"wrap",color:"#64748b"},
+  modalShade:{position:"fixed",inset:0,background:"rgba(8,21,58,.42)",zIndex:80,display:"grid",placeItems:"center",padding:12},
+  modal:{width:"min(430px,100%)",maxHeight:"90svh",overflow:"auto",background:"#fff",borderRadius:28,padding:16,boxShadow:"0 30px 90px rgba(0,0,0,.28)",textAlign:"left"},
+  modalHead:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",borderBottom:"1px solid #eff6ff",paddingBottom:10,marginBottom:12},
+  collapse:{border:"1px solid #dbeafe",borderRadius:18,padding:0,background:"#fff"},
+  collapseSummary:{listStyle:"none",cursor:"pointer",padding:"14px 15px",fontWeight:950,color:"#071746"},
+  phoneRow:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginTop:4},
+  phoneLink:{color:"#0f766e",fontWeight:950,textDecoration:"none"},
+  callBtn:{display:"inline-flex",alignItems:"center",justifyContent:"center",minHeight:36,padding:"8px 13px",borderRadius:999,background:"#0f62fe",color:"#fff",fontWeight:950,textDecoration:"none",boxShadow:"0 8px 16px rgba(15,98,254,.18)"},
+  dangerZone:{border:"1px solid #fecaca",borderRadius:18,padding:12,background:"#fff1f2",display:"grid",gap:6},
+  visitHistory:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:16,padding:11,background:"#fff"},
+  recentVisitRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,borderTop:"1px solid #eff6ff",paddingTop:9},
+  printOverlay:{position:"fixed",inset:0,zIndex:100,background:"#fff",overflow:"auto",padding:16},
+  printToolbar:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"},
+  printPaper:{maxWidth:820,margin:"0 auto",background:"#fff",padding:20,border:"1px solid #e5e7eb",borderRadius:16},
+  docPaper:{background:"#fff",color:"#111827",fontFamily:"system-ui,Segoe UI,sans-serif"},
+  docHeader:{display:"flex",justifyContent:"space-between",gap:20,borderBottom:"2px solid #111827",paddingBottom:16,marginBottom:16},
+  docSection:{marginTop:16},
 };
