@@ -9,7 +9,7 @@ const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"
 const blankOwner = {
   name: "", address: "", phone: "", email: "", invoice_email: "",
   emergency_contact_name: "", emergency_contact_phone: "", access_instructions: "",
-  house_instructions: "", payment_notes: "", billing_notes: "", default_mileage: 0,
+  house_instructions: "", payment_notes: "", billing_notes: "",
   notes: "", is_active: true,
 };
 const blankPet = {
@@ -18,7 +18,7 @@ const blankPet = {
   feeding_instructions: "", medication_instructions: "", medical_conditions: "", allergies: "",
   vet_name: "", vet_phone: "", emergency_vet: "", emergency_instructions: "",
   behavior_notes: "", leash_harness_notes: "", favorite_things: "", hide_spots: "", care_notes: "",
-  default_mileage: 0, is_active: true,
+  is_active: true,
 };
 const blankService = {
   name: "", category: "Dog Walk", default_duration_minutes: 30, base_price: 0, extra_pet_price: 0,
@@ -54,6 +54,21 @@ function addMinutes(time, minutes) {
 function money(n) { return `$${Number(n || 0).toFixed(2)}`; }
 function num(n) { const x = Number(n || 0); return Number.isFinite(x) ? x : 0; }
 function niceDate(iso) { if (!iso) return ""; const [y,m,d] = iso.split("-"); return `${m}/${d}/${y}`; }
+function timeLabel(value) {
+  if (!value) return "";
+  const [hRaw, mRaw] = String(value).split(":");
+  let h = Number(hRaw || 0);
+  const m = Number(mRaw || 0);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 || 12;
+  return `${hour12}:${String(m).padStart(2,"0")} ${suffix}`;
+}
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, i) => {
+  const h = Math.floor(i / 4);
+  const m = (i % 4) * 15;
+  const value = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  return { value, label: timeLabel(value) };
+});
 function nowIso() { return new Date().toISOString(); }
 function byName(a, b) { return (a.name || "").localeCompare(b.name || ""); }
 function visitSort(a,b) { return `${a.visit_date || ""} ${a.scheduled_start_time || ""}`.localeCompare(`${b.visit_date || ""} ${b.scheduled_start_time || ""}`); }
@@ -213,6 +228,36 @@ export default function App() {
     setSaving(false);
   }
 
+  async function updateVisitFromForm(visitId, form, selectedPetIds) {
+    if (!visitId) return;
+    setSaving(true); setError("");
+    try {
+      const service = services.find(s => s.id === form.service_id);
+      const option = options.find(o => o.id === form.saved_option_id);
+      const duration = num(form.duration_minutes || option?.default_duration_minutes || service?.default_duration_minutes || 30);
+      const base = num(form.base_price || option?.default_price || service?.base_price);
+      const extra = Math.max(0, selectedPetIds.length - 1) * num(service?.extra_pet_price);
+      const gst = settings?.charge_gst ? (base + extra + num(form.travel_fee) + num(form.add_on_fees)) * num(settings.gst_rate) / 100 : 0;
+      const total = base + extra + num(form.travel_fee) + num(form.add_on_fees) + gst;
+      const row = {
+        owner_id: form.owner_id, primary_pet_id: selectedPetIds[0] || null, service_id: form.service_id || null,
+        saved_option_id: form.saved_option_id || null, visit_date: form.visit_date || todayISO(),
+        scheduled_start_time: form.scheduled_start_time || null, scheduled_end_time: addMinutes(form.scheduled_start_time, duration),
+        duration_minutes: duration, base_price: base, extra_pet_fees: extra, travel_fee: num(form.travel_fee),
+        add_on_fees: num(form.add_on_fees), gst_amount: gst, total_amount: total, mileage: num(form.mileage),
+        internal_notes: form.internal_notes || option?.default_visit_notes || "", updated_at: nowIso(),
+      };
+      const { error: err } = await supabase.from("pet_visits").update(row).eq("id", visitId);
+      if (err) throw err;
+      await supabase.from("pet_visit_pets").delete().eq("visit_id", visitId);
+      if (selectedPetIds.length) await supabase.from("pet_visit_pets").insert(selectedPetIds.map(pet_id => ({ visit_id: visitId, pet_id })));
+      await supabase.from("pet_visit_checklist_items").delete().eq("visit_id", visitId);
+      await createChecklistForVisit(visitId, selectedPetIds, form.service_id, form.saved_option_id);
+      setToast("Visit rescheduled"); await loadAll();
+    } catch (e) { setError(tableError(e)); }
+    setSaving(false);
+  }
+
   async function repeatLastVisit(petId) {
     const last = visits
       .filter(v => visitPets.some(vp => vp.visit_id === v.id && vp.pet_id === petId) || v.primary_pet_id === petId)
@@ -304,14 +349,14 @@ export default function App() {
         <div style={S.kicker}>{VERSION}</div>
         <h1 style={S.title}>{settings?.business_name || "Pet Care"}</h1>
       </div>
-      <button style={S.ghostBtn} onClick={loadAll}>Refresh</button>
+      <button style={S.refreshBtn} onClick={loadAll} aria-label="Refresh data">↻</button>
     </header>
 
     {error && <div style={S.error}>{error}</div>}
     {toast && <div style={S.toast} onAnimationEnd={() => setToast("")}>{toast}</div>}
     {loading ? <div style={S.card}>Loading pet care data...</div> : <main style={S.main} className="page-transition">
       {tab === "Today" && <TodayPage visits={todayVisits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
-      {tab === "Schedule" && <SchedulePage owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
+      {tab === "Schedule" && <SchedulePage owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
     </main>}
@@ -339,13 +384,17 @@ function TodayPage({ visits, activeVisits, overdueVisits, owners, pets, services
     <Panel title="Today’s Schedule">{visits.length ? visits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No services scheduled for today." />}</Panel>
   </section>;
 }
-function SchedulePage({ owners, pets, services, options, visits, visitPets, ownerMap, petMap, serviceMap, onAdd, onRepeatLast, onRepeatVisit, onStart, onComplete, onPetInfo, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
+function SchedulePage({ owners, pets, services, options, visits, visitPets, ownerMap, petMap, serviceMap, onAdd, onUpdate, onRepeatLast, onRepeatVisit, onStart, onComplete, onPetInfo, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
   const [form, setForm] = useState(blankVisit);
   const [petIds, setPetIds] = useState([]);
+  const [editingVisitId, setEditingVisitId] = useState("");
+  const [showAdvancedVisitDetails, setShowAdvancedVisitDetails] = useState(false);
+  const [showAllCompleted, setShowAllCompleted] = useState(false);
   const ownerPets = pets.filter(p => p.owner_id === form.owner_id && p.is_active).sort(byName);
   const petOptions = options.filter(o => petIds.includes(o.pet_id) && o.is_active);
   const visibleVisits = visits.filter(v => ["Scheduled", "In Progress"].includes(v.status)).sort(visitSort);
-  const ownerRecentVisits = visits.filter(v => v.owner_id === form.owner_id).sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0, 5);
+  const completedVisits = visits.filter(v=>v.status==="Completed").sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`));
+  const ownerRecentVisits = visits.filter(v => v.owner_id === form.owner_id).sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0, 4);
   function visitMileageFor(nextPetIds, ownerId = form.owner_id) {
     return defaultMileageForPetIds(nextPetIds, pets, ownerMap[ownerId]);
   }
@@ -370,20 +419,35 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
     const o = options.find(x=>x.id===id); if (!o) return;
     setForm({...form, saved_option_id:id, service_id:o.service_id || "", duration_minutes:o.default_duration_minutes, base_price:o.default_price, mileage:visitMileageFor(petIds), internal_notes:o.default_visit_notes || ""});
   }
+  function loadVisitForEdit(v) {
+    const linkedPets = visitPets.filter(vp => vp.visit_id === v.id).map(vp => vp.pet_id);
+    const nextPetIds = linkedPets.length ? linkedPets : (v.primary_pet_id ? [v.primary_pet_id] : []);
+    setEditingVisitId(v.id);
+    setForm({ ...blankVisit, ...v, scheduled_start_time: v.scheduled_start_time || "09:00" });
+    setPetIds(nextPetIds);
+    setShowAdvancedVisitDetails(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
   return <section style={S.stack}>
     <Panel title="Add Scheduled Visit">
       <div style={S.formGrid}>
         <Field label="Owner"><select value={form.owner_id} onChange={e=>pickOwner(e.target.value)}><option value="">Select owner</option>{owners.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         <Field label="Service"><select value={form.service_id || ""} onChange={e=>applyService(e.target.value)}><option value="">Select service</option>{services.filter(s=>s.is_active).map(s=><option key={s.id} value={s.id}>{s.name} — {money(s.base_price)}</option>)}</select></Field>
-        <Field label="Saved pet option"><select value={form.saved_option_id || ""} onChange={e=>applyOption(e.target.value)}><option value="">Optional</option>{petOptions.map(o=><option key={o.id} value={o.id}>{o.option_name} — {money(o.default_price)}</option>)}</select></Field>
-        <Field label="Date"><input type="date" value={form.visit_date} onChange={e=>setForm({...form, visit_date:e.target.value})} /></Field>
-        <Field label="Start time"><input type="time" value={form.scheduled_start_time || ""} onChange={e=>setForm({...form, scheduled_start_time:e.target.value})} /></Field>
-        <Field label="Duration minutes"><input type="number" value={form.duration_minutes} onChange={e=>setForm({...form, duration_minutes:e.target.value})} /></Field>
-        <Field label="Base price"><input type="number" value={form.base_price} onChange={e=>setForm({...form, base_price:e.target.value})} /></Field>
-        <Field label="Mileage"><input type="number" value={form.mileage} onChange={e=>setForm({...form, mileage:e.target.value})} /></Field>
-        <Field label="Travel fee"><input type="number" value={form.travel_fee} onChange={e=>setForm({...form, travel_fee:e.target.value})} /></Field>
+        
+        <Field label="Date"><input type="date" value={form.visit_date} onClick={e=>e.currentTarget.showPicker?.()} onFocus={e=>e.currentTarget.showPicker?.()} onChange={e=>setForm({...form, visit_date:e.target.value})} /></Field>
+        <Field label="Start time"><select value={form.scheduled_start_time || ""} onChange={e=>setForm({...form, scheduled_start_time:e.target.value})}>{TIME_OPTIONS.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
       </div>
-      <div style={S.petPickWrap}>{ownerPets.map(p=><button key={p.id} style={petButtonStyle(p, petIds.includes(p.id))} onClick={()=>togglePet(p.id)}><span>{petFace(p)}</span>{p.name}</button>)}</div>
+      {form.owner_id && <div style={S.selectedPetNotice}>Booking for: {petIds.length ? petIds.map(id=>petMap[id]?.name).filter(Boolean).join(", ") : "Select at least one pet"}</div>}
+      <div style={S.petPickWrap}>{ownerPets.map(p=>{ const active = petIds.includes(p.id); return <button key={p.id} type="button" style={petButtonStyle(p, active)} onClick={()=>togglePet(p.id)}><span>{petFace(p)}</span><span>{p.name}</span>{active && <b>✓</b>}</button>; })}</div>
+      <details style={S.collapse} open={showAdvancedVisitDetails} onToggle={e=>setShowAdvancedVisitDetails(e.currentTarget.open)}>
+        <summary style={S.collapseSummary}>More visit details</summary>
+        <div style={S.formGridPadded}>
+          <Field label="Duration minutes"><input type="number" value={form.duration_minutes} onChange={e=>setForm({...form, duration_minutes:e.target.value})} /></Field>
+          <Field label="Base price"><input type="number" value={form.base_price} onChange={e=>setForm({...form, base_price:e.target.value})} /></Field>
+          <Field label="Add-on fees"><input type="number" value={form.add_on_fees} onChange={e=>setForm({...form, add_on_fees:e.target.value})} /></Field>
+          <Field label="Visit notes"><textarea value={form.internal_notes || ""} onChange={e=>setForm({...form, internal_notes:e.target.value})} /></Field>
+        </div>
+      </details>
       {form.owner_id && <div style={S.detailBox}>
         <b>Recent visits for this owner</b>
         {ownerRecentVisits.length ? ownerRecentVisits.map(v => <div key={v.id} style={S.recentVisitRow}>
@@ -393,11 +457,16 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
           <button style={S.secondaryMini} onClick={()=>onRepeatVisit(v.id)}>Use as Template</button>
         </div>) : <Empty text="No recent visits for this owner yet." />}
       </div>}
-      <Field label="Visit notes"><textarea value={form.internal_notes || ""} onChange={e=>setForm({...form, internal_notes:e.target.value})} /></Field>
-      <button style={S.primaryBtn} onClick={()=>onAdd(form, petIds)} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>Schedule Visit</button>
+      <div style={S.row}>
+        <button style={S.primaryBtn} onClick={()=>{ editingVisitId ? onUpdate(editingVisitId, form, petIds).then(()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }) : onAdd(form, petIds); }} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
+        {editingVisitId && <button style={S.secondaryBtn} onClick={()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel Edit</button>}
+      </div>
     </Panel>
-    <Panel title="Upcoming / Active Visits">{visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No upcoming visits yet." />}</Panel>
-    <Panel title="Recently Completed Visits">{visits.filter(v=>v.status==="Completed").sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0,12).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />)}</Panel>
+    <Panel title="Upcoming / Active Visits">{visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text="No upcoming visits yet." />}</Panel>
+    <Panel title="Recently Completed Visits">
+      {completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 3).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No completed visits yet." />}
+      {completedVisits.length > 3 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}
+    </Panel>
 
   </section>;
 }
@@ -505,6 +574,83 @@ function OfficePage(props) {
     {officeTab === "Deleted" && <DeletedAdmin {...props} />}
   </section>;
 }
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const [y, m, d] = String(value).slice(0, 10).split("-").map(Number);
+  return new Date(y || 2000, (m || 1) - 1, d || 1);
+}
+function endOfDay(d) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+function getPetReportRange(type, month, year) {
+  const now = new Date();
+  const y = Number(year || now.getFullYear());
+  const m = Number(month || now.getMonth() + 1) - 1;
+  if (type === "mtd") return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: endOfDay(now), label: "Month to date" };
+  if (type === "ytd") return { start: new Date(now.getFullYear(), 0, 1), end: endOfDay(now), label: "Year to date" };
+  if (type === "year") return { start: new Date(y, 0, 1), end: endOfDay(new Date(y, 11, 31)), label: String(y) };
+  return { start: new Date(y, m, 1), end: endOfDay(new Date(y, m + 1, 0)), label: `${y}-${String(m + 1).padStart(2, "0")}` };
+}
+function dateInRange(iso, range) {
+  const d = parseDateOnly(iso);
+  return d && d >= range.start && d <= range.end;
+}
+function visitPetsForNames(visit, visitPets, petMap) {
+  const pets = visitPetsFor(visit, visitPets, petMap);
+  return pets.map(p => p.name).filter(Boolean).join(", ") || "No pet listed";
+}
+function petReportText(preview) {
+  const lines = [];
+  lines.push(`${preview.title || "Pet Care Report"}`);
+  lines.push(`Generated: ${new Date().toLocaleString()}`);
+  lines.push(`Scope: ${preview.scopeLabel}`);
+  lines.push(`Period: ${niceDate(preview.range.start.toISOString().slice(0,10))} to ${niceDate(preview.range.end.toISOString().slice(0,10))}`);
+  lines.push("");
+  lines.push(`Completed visits: ${preview.totals.completedCount}`);
+  lines.push(`Revenue: ${money(preview.totals.revenue)}`);
+  lines.push(`Paid: ${money(preview.totals.paid)}`);
+  lines.push(`Unpaid: ${money(preview.totals.unpaid)}`);
+  lines.push(`Cancelled/Missed: ${preview.totals.cancelledMissed}`);
+  lines.push("");
+  lines.push(`Owner rankings sorted by ${preview.rankLabel}`);
+  preview.ownerRows.forEach((r, i) => {
+    lines.push(`${i + 1}. ${r.owner.name} | ${r.completedCount} visits | Total ${money(r.total)} | Paid ${money(r.paid)} | Unpaid ${money(r.unpaid)} | Avg/visit ${money(r.avgVisit)}`);
+    r.petRows.forEach(pr => lines.push(`   - ${pr.pet.name}: ${pr.count} visits, ${money(pr.total)}`));
+  });
+  if (!preview.ownerRows.length) lines.push("No visits in this report range.");
+  lines.push("");
+  lines.push("Service totals");
+  preview.serviceRows.forEach(r => lines.push(`- ${r.name}: ${r.count} visits, ${money(r.total)}`));
+  lines.push("");
+  lines.push("Visit details");
+  preview.rows.forEach(v => lines.push(`${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} | ${preview.ownerMap[v.owner_id]?.name || "Unknown"} | ${preview.serviceMap[v.service_id]?.name || "Service"} | ${visitPetsForNames(v, preview.visitPets, preview.petMap)} | ${money(v.total_amount)} | ${v.is_paid ? "Paid" : "Unpaid"}`));
+  return lines.join("\n");
+}
+function PrintPreviewOverlay({ title, onClose, onEmail, children }) {
+  return <div className="print-preview-screen" style={S.printOverlay}>
+    <style>{`@media print{body *{visibility:hidden!important}.print-preview-screen,.print-preview-screen *{visibility:visible!important}.print-preview-screen{position:absolute!important;inset:0!important;background:white!important;overflow:visible!important;padding:0!important}.print-preview-toolbar{display:none!important}.print-preview-paper{box-shadow:none!important;border:none!important;margin:0!important;max-width:none!important;width:100%!important}}`}</style>
+    <div className="print-preview-toolbar" style={S.printToolbar}>
+      <b>{title}</b>
+      <div style={S.row}>{onEmail && <button style={S.primaryBtn} onClick={onEmail}>Email Report</button>}<button style={S.primaryBtn} onClick={()=>window.print()}>Print / Save PDF</button><button style={S.secondaryBtn} onClick={onClose}>Close Preview</button></div>
+    </div>
+    <div className="print-preview-paper" style={S.printPaper}>{children}</div>
+  </div>;
+}
+function PetReportDocument({ preview, settings }) {
+  return <div style={S.docPaper}>
+    <div style={S.docHeader}>
+      <div><h1>{settings?.business_name || "Pet Care by Kiri"}</h1><div>{settings?.business_phone || ""}</div><div>{settings?.business_email || ""}</div></div>
+      <div style={{textAlign:"right"}}><h2>REPORT</h2><div>{preview.scopeLabel}</div><div>{niceDate(preview.range.start.toISOString().slice(0,10))} to {niceDate(preview.range.end.toISOString().slice(0,10))}</div></div>
+    </div>
+    <div style={S.docSection}><h3>Summary</h3><div style={S.grid3}><Metric title="Completed" value={preview.totals.completedCount} sub="visits"/><Metric title="Revenue" value={money(preview.totals.revenue)} sub="completed"/><Metric title="Unpaid" value={money(preview.totals.unpaid)} sub={`${preview.totals.unpaidCount} visits`}/></div></div>
+    <div style={S.docSection}><h3>Owner Rankings</h3><p style={S.muted}>Sorted by {preview.rankLabel}</p>{preview.ownerRows.map((r,i)=><div key={r.owner.id} style={S.reportRow}><b>{i+1}. {r.owner.name}</b><span>{r.completedCount} visits</span><span>{money(r.total)}</span><small>Paid {money(r.paid)} · Unpaid {money(r.unpaid)} · Avg {money(r.avgVisit)}</small>{r.petRows.length ? <div style={S.subList}>{r.petRows.map(pr=><span key={pr.pet.id}>{pr.pet.name}: {pr.count}</span>)}</div> : null}</div>)}</div>
+    <div style={S.docSection}><h3>Service Totals</h3>{preview.serviceRows.map(r=><div key={r.name} style={S.reportRow}><b>{r.name}</b><span>{r.count} visits</span><span>{money(r.total)}</span></div>)}</div>
+    <div style={S.docSection}><h3>Visit Details</h3>{preview.rows.map(v=><div key={v.id} style={S.reportRow}><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><span>{preview.ownerMap[v.owner_id]?.name || "Unknown"}</span><span>{preview.serviceMap[v.service_id]?.name || "Service"}</span><small>{visitPetsForNames(v, preview.visitPets, preview.petMap)} · {money(v.total_amount)} · {v.is_paid ? "Paid" : "Unpaid"}</small></div>)}</div>
+  </div>;
+}
 function buildReportText({ title, owners = [], pets = [], visits = [], visitPets = [], ownerMap = {}, petMap = {}, serviceMap = {}, filter = null }) {
   const rows = filter ? visits.filter(filter) : visits;
   const lines = [];
@@ -567,25 +713,101 @@ function printTextDocument(title, text) {
   }, 250);
 }
 function emailTextDocument(subject, text, to = "") {
-  const href = `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
-  window.location.href = href;
+  const href = `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject || "Pet Care")}&body=${encodeURIComponent(text || "")}`;
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 500);
+  } catch (err) {
+    try { navigator.clipboard?.writeText(text || ""); } catch (_) {}
+    window.alert("Email app did not open. The invoice/report text was copied if clipboard access was available.");
+  }
+}
+function singleVisitBillingText(owner, visit, visitPets, petMap, serviceMap, title = "Invoice") {
+  const pets = visitPetsFor(visit, visitPets, petMap).map(p => p.name).join(", ");
+  const lines = [];
+  lines.push(title);
+  lines.push(owner?.name || "Owner");
+  if (owner?.address) lines.push(owner.address);
+  if (owner?.invoice_email || owner?.email) lines.push(owner.invoice_email || owner.email);
+  lines.push("");
+  lines.push(`${niceDate(visit.visit_date)} ${timeLabel(visit.scheduled_start_time)} — ${serviceMap[visit.service_id]?.name || "Service"}`);
+  if (pets) lines.push(`Pet(s): ${pets}`);
+  lines.push(`Duration: ${visit.duration_minutes || 0} minutes`);
+  lines.push(`Amount: ${money(visit.total_amount)}`);
+  lines.push(`Status: ${visit.is_paid ? "Paid" : "Unpaid"}`);
+  if (visit.payment_method) lines.push(`Payment method: ${visit.payment_method}`);
+  if (visit.completion_notes) lines.push(`Notes: ${visit.completion_notes}`);
+  lines.push("");
+  lines.push(`Total due: ${visit.is_paid ? money(0) : money(visit.total_amount)}`);
+  return lines.join("\n");
 }
 function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap, onMarkPaid, settings }) {
-  const completed = visits.filter(v=>v.status === "Completed");
-  const unpaid = visits.filter(v=>!v.is_paid && v.status === "Completed");
-  const byOwner = owners.map(o => {
-    const rows = completed.filter(v=>v.owner_id === o.id);
-    return { owner:o, count:rows.length, total:rows.reduce((s,v)=>s+num(v.total_amount),0), mileage:rows.reduce((s,v)=>s+num(v.mileage),0) };
-  }).filter(x=>x.count || x.total).sort((a,b)=>b.total-a.total);
-  const byService = Object.values(completed.reduce((acc,v)=>{ const key=v.service_id || "custom"; acc[key] ||= { name: serviceMap[v.service_id]?.name || "Custom/Unknown", count:0, total:0 }; acc[key].count++; acc[key].total+=num(v.total_amount); return acc; },{})).sort((a,b)=>b.total-a.total);
-  const completedText = buildReportText({ title:"Completed Visits Report", owners, pets, visits, visitPets, ownerMap, petMap, serviceMap, filter:v=>v.status==="Completed" });
-  const unpaidText = buildReportText({ title:"Unpaid Completed Visits Report", owners, pets, visits, visitPets, ownerMap, petMap, serviceMap, filter:v=>v.status==="Completed" && !v.is_paid });
+  const [scope, setScope] = useState("all");
+  const [ownerId, setOwnerId] = useState("");
+  const [reportType, setReportType] = useState("month");
+  const [month, setMonth] = useState(String(new Date().getMonth() + 1));
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [rankBy, setRankBy] = useState("total");
+  const [preview, setPreview] = useState(null);
+  const range = useMemo(()=>getPetReportRange(reportType, month, year), [reportType, month, year]);
+  const selectedOwner = owners.find(o=>o.id===ownerId) || null;
+  const rows = visits.filter(v => dateInRange(v.visit_date, range)).filter(v => scope !== "owner" || !ownerId || v.owner_id === ownerId);
+  const completed = rows.filter(v=>v.status === "Completed");
+  const unpaid = completed.filter(v=>!v.is_paid);
+  const paid = completed.filter(v=>v.is_paid);
+  const cancelledMissed = rows.filter(v=>v.status === "Cancelled" || v.status === "Missed").length;
+  const totals = {
+    completedCount: completed.length,
+    revenue: completed.reduce((s,v)=>s+num(v.total_amount),0),
+    paid: paid.reduce((s,v)=>s+num(v.total_amount),0),
+    unpaid: unpaid.reduce((s,v)=>s+num(v.total_amount),0),
+    unpaidCount: unpaid.length,
+    cancelledMissed,
+  };
+  const ownerRows = owners.map(owner => {
+    const ownerVisits = completed.filter(v=>v.owner_id === owner.id);
+    const paidRows = ownerVisits.filter(v=>v.is_paid);
+    const unpaidRows = ownerVisits.filter(v=>!v.is_paid);
+    const petRows = pets.filter(p=>p.owner_id===owner.id).map(p=>{
+      const petVisits = ownerVisits.filter(v=>v.primary_pet_id===p.id || visitPets.some(vp=>vp.visit_id===v.id && vp.pet_id===p.id));
+      return { pet:p, count:petVisits.length, total:petVisits.reduce((s,v)=>s+num(v.total_amount),0) };
+    }).filter(x=>x.count);
+    const total = ownerVisits.reduce((s,v)=>s+num(v.total_amount),0);
+    return { owner, completedCount: ownerVisits.length, total, paid: paidRows.reduce((s,v)=>s+num(v.total_amount),0), unpaid: unpaidRows.reduce((s,v)=>s+num(v.total_amount),0), unpaidCount: unpaidRows.length, avgVisit: ownerVisits.length ? total / ownerVisits.length : 0, petRows };
+  }).filter(x=>x.completedCount || x.total || x.unpaid).sort((a,b)=>{
+    const key = rankBy === "visits" ? "completedCount" : rankBy === "unpaid" ? "unpaid" : rankBy === "avg" ? "avgVisit" : "total";
+    const diff = num(b[key])-num(a[key]);
+    return diff || (a.owner.name || "").localeCompare(b.owner.name || "");
+  });
+  const serviceRows = Object.values(completed.reduce((acc,v)=>{ const key=v.service_id || "custom"; acc[key] ||= { name: serviceMap[v.service_id]?.name || "Custom/Unknown", count:0, total:0, unpaid:0 }; acc[key].count++; acc[key].total+=num(v.total_amount); if(!v.is_paid) acc[key].unpaid+=num(v.total_amount); return acc; },{})).sort((a,b)=>b.total-a.total);
+  const rankLabels = { total:"Total $", visits:"Visit Count", unpaid:"Unpaid $", avg:"Average $ / Visit" };
+  const reportData = { title:"Pet Care Report", scopeLabel: scope === "owner" ? selectedOwner?.name || "Selected Owner" : "All Pet Owners", range, rows, completed, unpaid, paid, totals, ownerRows, serviceRows, rankBy, rankLabel: rankLabels[rankBy], ownerMap, petMap, serviceMap, visitPets };
+  const reportText = petReportText(reportData);
+  function emailReport(){ emailTextDocument(`${settings?.business_name || "Pet Care"} report - ${reportData.scopeLabel}`, reportText, settings?.default_email || settings?.business_email || ""); }
   return <div style={S.stack}>
-    <div style={S.row}><button style={S.secondaryBtn} onClick={()=>printTextDocument("Completed Visits Report", completedText)}>Print Completed Report</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument("Completed Visits Report", completedText, settings?.default_email)}>Email Completed Report</button><button style={S.primaryBtn} onClick={()=>printTextDocument("Unpaid Visits Report", unpaidText)}>Print Unpaid Report</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument("Unpaid Visits Report", unpaidText, settings?.default_email)}>Email Unpaid Report</button></div>
-    <div style={S.grid3}><Metric title="Completed visits" value={completed.length} sub="all time" /><Metric title="Unpaid" value={money(unpaid.reduce((s,v)=>s+num(v.total_amount),0))} sub={`${unpaid.length} visits`} /><Metric title="Revenue" value={money(completed.reduce((s,v)=>s+num(v.total_amount),0))} sub="completed" /></div>
-    <Panel title="Revenue by Pet Owner">{byOwner.length ? byOwner.map(x=><div key={x.owner.id} style={S.reportRow}><b>{x.owner.name}</b><span>{x.count} visits</span><span>{money(x.total)}</span><small>{x.mileage} km</small><div style={S.subList}>{pets.filter(p=>p.owner_id===x.owner.id).map(p=><span key={p.id}>{p.name}</span>)}</div></div>) : <Empty text="No completed revenue yet." />}</Panel>
-    <Panel title="Revenue by Service Type">{byService.map(s=><div key={s.name} style={S.reportRow}><b>{s.name}</b><span>{s.count} visits</span><span>{money(s.total)}</span></div>)}</Panel>
-    <Panel title="Unpaid Completed Visits">{unpaid.length ? unpaid.map(v=><div key={v.id} style={S.reportRow}><b>{ownerMap[v.owner_id]?.name || "Unknown"}</b><span>{niceDate(v.visit_date)}</span><span>{serviceMap[v.service_id]?.name}</span><span>{money(v.total_amount)}</span><small>{visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</small><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>) : <Empty text="No unpaid completed visits." />}</Panel>
+    <Panel title="Reports" subtitle="Live report view. Filters update the preview automatically.">
+      <div style={S.formGrid}>
+        <Field label="Scope"><select value={scope} onChange={e=>setScope(e.target.value)}><option value="all">All pet owners</option><option value="owner">Single owner</option></select></Field>
+        {scope === "owner" && <Field label="Pet owner"><select value={ownerId} onChange={e=>setOwnerId(e.target.value)}><option value="">Choose owner</option>{owners.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>}
+        <Field label="Period"><select value={reportType} onChange={e=>setReportType(e.target.value)}><option value="month">Selected month</option><option value="mtd">Month to date</option><option value="ytd">Year to date</option><option value="year">Selected year</option></select></Field>
+        {reportType === "month" && <Field label="Month"><select value={month} onChange={e=>setMonth(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i+1} value={String(i+1)}>{i+1}</option>)}</select></Field>}
+        <Field label="Year"><input type="number" value={year} onChange={e=>setYear(e.target.value)} /></Field>
+      </div>
+      <div style={S.row}><button style={S.primaryBtn} onClick={()=>setPreview(reportData)}>Print / Save PDF</button><button style={S.secondaryBtn} onClick={emailReport}>Email Report</button></div>
+    </Panel>
+    <Panel title="Report Preview" subtitle={`${reportData.scopeLabel} · ${niceDate(range.start.toISOString().slice(0,10))} to ${niceDate(range.end.toISOString().slice(0,10))}`}>
+      <div style={S.grid3}><Metric title="Completed" value={totals.completedCount} sub="visits" /><Metric title="Revenue" value={money(totals.revenue)} sub="completed" /><Metric title="Unpaid" value={money(totals.unpaid)} sub={`${totals.unpaidCount} visits`} /></div>
+      <div style={S.grid3}><Metric title="Paid" value={money(totals.paid)} sub="received" /><Metric title="Avg / Visit" value={money(totals.completedCount ? totals.revenue/totals.completedCount : 0)} sub="completed" /><Metric title="Cancelled/Missed" value={totals.cancelledMissed} sub="visits" /></div>
+    </Panel>
+    <Panel title="Rank pet owners by"><div style={S.row}>{Object.entries(rankLabels).map(([k,label])=><button key={k} style={rankBy===k?S.primaryMini:S.secondaryMini} onClick={()=>setRankBy(k)}>{label}</button>)}</div><p style={S.muted}>Sorted by {rankLabels[rankBy]} high to low.</p></Panel>
+    <Panel title="Pet Owner Rankings">{ownerRows.length ? ownerRows.map((x,idx)=><div key={x.owner.id} style={S.reportRow}><b>{idx+1}. {x.owner.name}</b><span>{x.completedCount} visits</span><span>{money(x.total)}</span><small>Paid {money(x.paid)} · Unpaid {money(x.unpaid)} · Avg {money(x.avgVisit)}</small><div style={S.subList}>{x.petRows.map(pr=><span key={pr.pet.id}>{pr.pet.name}: {pr.count} visits</span>)}</div></div>) : <Empty text="No completed visits in this report range." />}</Panel>
+    <Panel title="Revenue by Service Type">{serviceRows.length ? serviceRows.map(s=><div key={s.name} style={S.reportRow}><b>{s.name}</b><span>{s.count} visits</span><span>{money(s.total)}</span>{s.unpaid ? <small>Unpaid {money(s.unpaid)}</small> : null}</div>) : <Empty text="No service revenue in this report range." />}</Panel>
+    <Panel title="Unpaid Completed Visits">{unpaid.length ? unpaid.map(v=><div key={v.id} style={S.reportRow}><b>{ownerMap[v.owner_id]?.name || "Unknown"}</b><span>{niceDate(v.visit_date)}</span><span>{serviceMap[v.service_id]?.name || "Service"}</span><small>{visitPetsForNames(v, visitPets, petMap)} · {money(v.total_amount)}</small><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>) : <Empty text="No unpaid completed visits in this report range." />}</Panel>
+    {preview && <PrintPreviewOverlay title="Report Print Preview" onClose={()=>setPreview(null)} onEmail={emailReport}><PetReportDocument preview={reportData} settings={settings} /></PrintPreviewOverlay>}
   </div>;
 }
 function ServicesAdmin({ services, serviceChecklist, onSaveService, onAddServiceChecklist, onDeleteServiceChecklist, onDeleteService }) {
@@ -643,7 +865,7 @@ function DeleteConfirmModal({ request, setRequest, onClose, onConfirm }) {
   </div></Modal>;
 }
 function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel }) {
-  const [form, setForm] = useState({ travel_date: todayISO(), owner_id:"", visit_id:"", mileage:0, travel_purpose:"Business", notes:"" });
+  const [form, setForm] = useState({ travel_date: todayISO(), owner_id:"", visit_id:"", mileage:0, mileage_type:"Business", notes:"" });
   const manualTravel = travel.filter(t => !t.visit_id);
   const actualTotal = manualTravel.reduce((s,t)=>s+num(t.mileage),0);
   const assignedTotal = visits.filter(v=>v.status==='Completed').reduce((s,v)=>s+num(v.mileage),0);
@@ -662,8 +884,8 @@ function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel }) {
       <Metric title="Today difference" value={`${todayActual - todayAssigned} km`} sub="daily comparison" />
     </div>
     <h3>Add daily actual mileage</h3>
-    <div style={S.formGrid}><Field label="Date"><input type="date" value={form.travel_date} onChange={e=>setForm({...form,travel_date:e.target.value})}/></Field><Field label="Mileage type"><select value={form.travel_purpose} onChange={e=>setForm({...form,travel_purpose:e.target.value})}><option>Business</option><option>Owner visit</option><option>Supplies</option><option>Car wash</option><option>Vet / emergency</option><option>Other</option></select></Field><Field label="Owner / optional"><select value={form.owner_id} onChange={e=>setForm({...form,owner_id:e.target.value})}><option value="">None / general business</option>{Object.values(ownerMap).map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field><Field label="Actual mileage"><input type="number" value={form.mileage} onChange={e=>setForm({...form,mileage:e.target.value})}/></Field></div>
-    <Field label="Notes"><textarea placeholder="Examples: supplies run, car wash, meeting, owner visit, emergency trip" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveTravel({...form, visit_id:null, owner_id: form.owner_id || null, notes: [form.travel_purpose, form.notes].filter(Boolean).join(": ")})}>Save Daily Mileage Entry</button>
+    <div style={S.formGrid}><Field label="Date"><input type="date" value={form.travel_date} onChange={e=>setForm({...form,travel_date:e.target.value})}/></Field><Field label="Mileage type"><select value={form.mileage_type} onChange={e=>setForm({...form,mileage_type:e.target.value})}><option>Business</option><option>Owner visit</option><option>Supplies</option><option>Car wash</option><option>Vet / emergency</option></select></Field><Field label="Owner / optional"><select value={form.owner_id} onChange={e=>setForm({...form,owner_id:e.target.value})}><option value="">None / general business</option>{Object.values(ownerMap).map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field><Field label="Actual mileage"><input type="number" value={form.mileage} onChange={e=>setForm({...form,mileage:e.target.value})}/></Field></div>
+    <Field label="Notes"><textarea placeholder="Examples: supplies run, car wash, meeting, owner visit, emergency trip" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveTravel({ travel_date: form.travel_date, visit_id:null, owner_id: form.owner_id || null, mileage: num(form.mileage), notes: [form.mileage_type, form.notes].filter(Boolean).join(": ") })}>Save Daily Mileage Entry</button>
     <h3>Recent daily travel</h3>{manualTravel.map(t=><div key={t.id} style={S.reportRow}><b>{niceDate(t.travel_date)}</b><span>{ownerMap[t.owner_id]?.name || "Manual"}</span><span>{t.mileage} km</span><small>{t.notes}</small></div>)}
     <h3>Assigned visit mileage</h3>{visits.filter(v=>v.status==='Completed' && num(v.mileage)>0).slice(0,50).map(v=><div key={v.id} style={S.reportRow}><b>{niceDate(v.visit_date)}</b><span>{ownerMap[v.owner_id]?.name || "Unknown"}</span><span>{v.mileage} km</span><small>{serviceMap[v.service_id]?.name || "Visit"}</small></div>)}
   </Panel>;
@@ -676,19 +898,89 @@ function SettingsAdmin({ settings, onSaveSettings }) {
 function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
   return <Panel title="Deleted Items"><p style={S.muted}>Deleted items are logged here for reference. Restore can be added after the new data model is fully stable.</p>{deleted.map(d=><div key={d.id} style={S.reportRow}><b>{d.item_type}</b><span>{d.item_label}</span><span>{new Date(d.deleted_at).toLocaleString()}</span><button style={S.dangerMini} onClick={()=>onHardDeleteDeleted(d.id)}>Remove log</button></div>)}</Panel>;
 }
-function VisitCard({ visit, owner, pets, service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
-  const petNames = pets.map(p=>p.name).join(", ") || "No pet selected";
+function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit, onReschedule }) {
+  const safePets = (pets || []).filter(Boolean);
+  const canPetInfo = typeof onPetInfo === "function";
   return <div style={S.visitCard}>
-    <div><b>{niceDate(visit.visit_date)} {visit.scheduled_start_time || ""}</b><div>{owner?.name || "Unknown owner"} — {service?.name || "Service"}</div><div style={S.petLine}>{pets.map(p=><button key={p.id} style={S.petChip} onClick={()=>onPetInfo(p.id)}>{p.name} Info</button>)}</div><small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {num(visit.mileage)} km · {money(visit.total_amount)} · {visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small></div>
-    <div style={S.cardActions}>{visit.status === "Scheduled" && <button style={S.secondaryMini} onClick={()=>onStart(visit.id)}>Optional Start</button>}{["Scheduled","In Progress"].includes(visit.status) && <button style={S.primaryMini} onClick={()=>onComplete(visit.id)}>Complete</button>}{visit.status === "Completed" && !visit.is_paid && <button style={S.primaryMini} onClick={()=>onMarkPaid(visit.id)}>Mark Paid</button>}{visit.status === "Completed" && visit.is_paid && <button style={S.secondaryMini} onClick={()=>onMarkUnpaid(visit.id)}>Mark Unpaid</button>}{visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={()=>onCancel(visit.id)}>Cancel</button>}{onDeleteVisit && visit.status !== "Completed" && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>
+    <div>
+      <b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b>
+      <div>{owner?.name || "Unknown owner"} — {service?.name || "Service"}</div>
+      <div style={S.petLine}>
+        {safePets.length ? safePets.map(p => (
+          <button key={p.id} style={S.petChip} disabled={!canPetInfo} onClick={() => canPetInfo && onPetInfo(p.id)}>{p.name} Info</button>
+        )) : <small style={S.muted}>No pet attached</small>}
+      </div>
+      <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
+    </div>
+    <div style={S.cardActions}>
+      {visit.status === "Scheduled" && onStart && <button style={S.secondaryMini} onClick={() => onStart(visit.id)}>Optional Start</button>}
+      {["Scheduled","In Progress"].includes(visit.status) && onComplete && <button style={S.primaryMini} onClick={() => onComplete(visit.id)}>Complete</button>}
+      {visit.status === "Completed" && !visit.is_paid && onMarkPaid && <button style={S.primaryMini} onClick={() => onMarkPaid(visit.id)}>Mark Paid</button>}
+      {visit.status === "Completed" && visit.is_paid && onMarkUnpaid && <button style={S.secondaryMini} onClick={() => onMarkUnpaid(visit.id)}>Mark Unpaid</button>}
+    </div>
+    {(onCancel || onDeleteVisit || onReschedule) && <details style={S.moreActions}><summary style={S.moreSummary}>More</summary><div style={S.moreActionBody}>
+      {visit.status !== "Completed" && onReschedule && <button style={S.secondaryMini} onClick={() => onReschedule(visit)}>Reschedule</button>}
+      {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => onCancel(visit.id)}>Cancel Visit</button>}
+      {onDeleteVisit && visit.status !== "Completed" && <button style={S.dangerMini} onClick={() => onDeleteVisit(visit)}>Delete Visit</button>}
+    </div></details>}
   </div>;
 }
 function CompleteModal({ visit, checklist, owner, pets, service, onToggleChecklist, onClose, onSave }) {
-  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "", owner_update_sent: !!visit.owner_update_sent, medication_given: !!visit.medication_given, feeding_completed: !!visit.feeding_completed, water_refreshed: !!visit.water_refreshed, door_locked: !!visit.door_locked });
-  return <Modal onClose={onClose} title="Complete Visit"><div style={S.stack}><b>{service?.name}</b><span>{owner?.name} — {pets.map(p=>p.name).join(", ")}</span><p style={S.muted}>This is service-rate based. You can complete the visit without starting a timer. Actual start/end time does not change the price.</p><Panel title="Checklist">{checklist.map(i=><label key={i.id} style={S.check}><input type="checkbox" checked={!!i.is_done} onChange={()=>onToggleChecklist(i)} /> {i.label}</label>)}</Panel><div style={S.formGrid}>{["feeding_completed","water_refreshed","medication_given","door_locked","owner_update_sent","is_paid"].map(k=><label key={k} style={S.check}><input type="checkbox" checked={!!form[k]} onChange={e=>setForm({...form,[k]:e.target.checked})}/> {k.replaceAll("_"," ")}</label>)}</div>{form.is_paid && <><Field label="Payment method"><select value={form.payment_method || ""} onChange={e=>setForm({...form,payment_method:e.target.value})}><option value="">Select method</option><option>Cash</option><option>E-transfer</option><option>Cheque</option><option>Card</option><option>Other</option></select></Field><Field label="Payment notes"><textarea value={form.payment_notes || ""} onChange={e=>setForm({...form,payment_notes:e.target.value})}/></Field></>}<Field label="Completion notes"><textarea value={form.completion_notes} onChange={e=>setForm({...form,completion_notes:e.target.value})}/></Field><Field label="Incident / issue notes"><textarea value={form.incident_notes} onChange={e=>setForm({...form,incident_notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSave(visit.id, form)}>Mark Completed</button></div></Modal>;
+  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "", feeding_completed: !!visit.feeding_completed, water_refreshed: !!visit.water_refreshed, medication_given: !!visit.medication_given, door_locked: !!visit.door_locked, owner_update_sent: !!visit.owner_update_sent });
+  const quickChecks = ["feeding_completed","water_refreshed","medication_given","door_locked","owner_update_sent","is_paid"];
+  return <Modal onClose={onClose} title="Complete Visit"><div style={S.stack}>
+    <b>{service?.name}</b>
+    <span>{owner?.name} — {pets.map(p=>p.name).join(", ")}</span>
+    <p style={S.muted}>Service-rate based. Complete the visit without starting a timer.</p>
+    <Panel title="Checklist">
+      <div style={S.compactChecklist}>{checklist.length ? checklist.map(i=><label key={i.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!i.is_done} onChange={()=>onToggleChecklist(i)} /> <span>{i.label}</span></label>) : <Empty text="No checklist items for this visit." />}</div>
+    </Panel>
+    <div style={S.compactChecklist}>{quickChecks.map(k=><label key={k} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form[k]} onChange={e=>setForm({...form,[k]:e.target.checked})}/> <span>{k.replaceAll("_"," ")}</span></label>)}</div>
+    {form.is_paid && <><Field label="Payment method"><select value={form.payment_method || ""} onChange={e=>setForm({...form,payment_method:e.target.value})}><option value="">Select method</option><option>Cash</option><option>E-transfer</option><option>Cheque</option><option>Card</option><option>Other</option></select></Field><Field label="Payment notes"><textarea value={form.payment_notes || ""} onChange={e=>setForm({...form,payment_notes:e.target.value})}/></Field></>}
+    <Field label="Completion notes"><textarea value={form.completion_notes} onChange={e=>setForm({...form,completion_notes:e.target.value})}/></Field>
+    <Field label="Incident / issue notes"><textarea value={form.incident_notes} onChange={e=>setForm({...form,incident_notes:e.target.value})}/></Field>
+    <button style={S.primaryBtn} onClick={()=>onSave(visit.id, form)}>Mark Completed</button>
+  </div></Modal>;
 }
-function PetInfoModal({ pet, owner, vetClinic, onClose }) { return <Modal onClose={onClose} title={`${pet.name} — Emergency & Care Info`}><div style={S.petInfo}>{pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No Photo</div>}<h2>{pet.name}</h2><p>{pet.species} · {pet.breed} · {pet.color_description}</p><Info label="Owner" value={`${owner?.name || ""} ${owner?.phone || ""}`} /><Info label="Owner emergency contact" value={`${owner?.emergency_contact_name || ""} ${owner?.emergency_contact_phone || ""}`} /><Info label="Vet clinic" value={vetClinic ? `${vetClinic.clinic_name || ""} ${vetClinic.phone || ""}` : `${pet.vet_name || ""} ${pet.vet_phone || ""}`} danger /><Info label="Vet address" value={vetClinic?.address || ""} /><Info label="After-hours / emergency vet" value={vetClinic?.emergency_phone || pet.emergency_vet} danger /><Info label="Medical conditions" value={pet.medical_conditions} danger /><Info label="Allergies" value={pet.allergies} danger /><Info label="Medication" value={pet.medication_instructions} /><Info label="Feeding" value={pet.feeding_instructions} /><Info label="Emergency instructions" value={pet.emergency_instructions} danger /><Info label="Behavior warnings" value={pet.behavior_notes} danger /><Info label="Leash / harness" value={pet.leash_harness_notes} /><Info label="Access instructions" value={owner?.access_instructions} /><Info label="Care notes" value={pet.care_notes} /></div></Modal>; }
-function Info({label,value,danger}) { if(!value) return null; return <div style={danger?S.infoDanger:S.info}><b>{label}</b><p>{value}</p></div>; }
+
+function PetInfoModal({ pet, owner, vetClinic, onClose }) {
+  if (!pet) {
+    return <Modal onClose={onClose} title="Pet Info"><Empty text="Pet information is not available for this visit." /></Modal>;
+  }
+  const ownerContact = [owner?.name, owner?.phone].filter(Boolean).join(" — ");
+  const ownerEmergency = [owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — ");
+  const vetName = vetClinic?.clinic_name || pet.vet_name || pet.emergency_vet;
+  const vetPhone = vetClinic?.phone || pet.vet_phone;
+  const vetEmergency = vetClinic?.emergency_phone || pet.emergency_vet;
+  return <Modal onClose={onClose} title={`${pet.name || "Pet"} — Emergency & Care Info`}>
+    <div style={S.petInfo}>
+      {pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No pet photo</div>}
+      <h2 style={{margin:"4px 0"}}>{pet.name || "Pet"}</h2>
+      <p style={S.muted}>{[pet.species, pet.breed, pet.color_description].filter(Boolean).join(" · ")}</p>
+      <div style={S.infoGrid}>
+        <InfoLine label="Owner" value={ownerContact} />
+        <InfoLine label="Owner emergency contact" value={ownerEmergency} danger />
+        <InfoLine label="Access instructions" value={owner?.access_instructions} danger />
+        <InfoLine label="House instructions" value={owner?.house_instructions} />
+        <InfoLine label="Vet clinic" value={vetName} danger />
+        <InfoLine label="Vet phone" value={vetPhone} danger />
+        <InfoLine label="Vet address" value={vetClinic?.address} />
+        <InfoLine label="Emergency / after-hours vet" value={vetEmergency} danger />
+        <InfoLine label="Medical conditions" value={pet.medical_conditions} danger />
+        <InfoLine label="Allergies" value={pet.allergies} danger />
+        <InfoLine label="Emergency instructions" value={pet.emergency_instructions} danger />
+        <InfoLine label="Medication" value={pet.medication_instructions} />
+        <InfoLine label="Feeding" value={pet.feeding_instructions} />
+        <InfoLine label="Behavior warnings" value={pet.behavior_notes} danger />
+        <InfoLine label="Leash / harness" value={pet.leash_harness_notes} />
+        <InfoLine label="Favorite things" value={pet.favorite_things} />
+        <InfoLine label="Hide spots" value={pet.hide_spots} />
+        <InfoLine label="Care notes" value={pet.care_notes} />
+      </div>
+    </div>
+  </Modal>;
+}
+
 function Modal({ title, children, onClose }) { return <div style={S.modalShade}><div style={S.modal}><div style={S.modalHead}><h2>{title}</h2><button style={S.ghostBtn} onClick={onClose}>Close</button></div>{children}</div></div>; }
 function Panel({ title, children }) { return <div style={S.card}><h2>{title}</h2>{children}</div>; }
 function Metric({ title, value, sub }) { return <div style={S.metric}><span>{title}</span><b>{value}</b><small>{sub}</small></div>; }
@@ -704,8 +996,7 @@ function OwnerSummary({ owner }) {
     <InfoLine label="Invoice email" value={owner.invoice_email} />
     <InfoLine label="Address" value={owner.address} />
     <InfoLine label="Emergency contact" value={[owner.emergency_contact_name, owner.emergency_contact_phone].filter(Boolean).join(" — ")} danger />
-    <InfoLine label="Default mileage" value={`${num(owner.default_mileage)} km`} />
-    <InfoLine label="Access instructions" value={owner.access_instructions} danger />
+        <InfoLine label="Access instructions" value={owner.access_instructions} danger />
     <InfoLine label="House instructions" value={owner.house_instructions} />
     <InfoLine label="Billing notes" value={owner.billing_notes} />
     <InfoLine label="Notes" value={owner.notes} />
@@ -713,17 +1004,25 @@ function OwnerSummary({ owner }) {
 }
 function PetReadOnly({ pet, petTab, visits, serviceMap, visitPets, petMap, petChecklist, vetClinics = [] }) {
   if (!pet) return <Empty text="Choose a pet or add a new pet." />;
-  if (petTab === "Profile") return <div style={S.infoGrid}>{pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No photo</div>}<InfoLine label="Name" value={pet.name} /><InfoLine label="Species" value={pet.species} /><InfoLine label="Breed" value={pet.breed} /><InfoLine label="Color / description" value={pet.color_description} /><InfoLine label="Age" value={pet.age_text} /><InfoLine label="Weight" value={pet.weight} /><InfoLine label="Sex" value={pet.sex} /><InfoLine label="Spayed / neutered" value={pet.spayed_neutered} /><InfoLine label="Default mileage" value={`${num(pet.default_mileage)} km`} /></div>;
+  const vetClinic = vetClinics.find(v => v.id === pet.vet_clinic_id);
+  if (petTab === "Profile") return <div style={S.infoGrid}>{pet.photo_url ? <img src={pet.photo_url} style={S.petPhotoBig} /> : <div style={S.photoBlank}>No photo</div>}<InfoLine label="Name" value={pet.name} /><InfoLine label="Species" value={pet.species} /><InfoLine label="Breed" value={pet.breed} /><InfoLine label="Color / description" value={pet.color_description} /><InfoLine label="Age" value={pet.age_text} /><InfoLine label="Weight" value={pet.weight} /><InfoLine label="Sex" value={pet.sex} /><InfoLine label="Spayed / neutered" value={pet.spayed_neutered} /></div>;
   if (petTab === "Care") return <div style={S.infoGrid}><InfoLine label="Feeding instructions" value={pet.feeding_instructions} /><InfoLine label="Medication instructions" value={pet.medication_instructions} danger /><InfoLine label="Behavior notes" value={pet.behavior_notes} /><InfoLine label="Leash / harness notes" value={pet.leash_harness_notes} /><InfoLine label="Favorite things" value={pet.favorite_things} /><InfoLine label="Hide spots" value={pet.hide_spots} /><InfoLine label="Care notes" value={pet.care_notes} /></div>;
   if (petTab === "Emergency") return <div style={S.infoGrid}><InfoLine label="Medical conditions" value={pet.medical_conditions} danger /><InfoLine label="Allergies" value={pet.allergies} danger /><InfoLine label="Vet clinic" value={vetClinic?.clinic_name || pet.vet_name} /><InfoLine label="Vet phone" value={vetClinic?.phone || pet.vet_phone} danger /><InfoLine label="Vet address" value={vetClinic?.address} /><InfoLine label="Emergency / after-hours vet" value={vetClinic?.emergency_phone || pet.emergency_vet} danger /><InfoLine label="Emergency instructions" value={pet.emergency_instructions} danger /></div>;
   if (petTab === "Checklist") return <div style={S.stack}>{petChecklist.filter(i=>i.pet_id===pet.id).length ? <ul>{petChecklist.filter(i=>i.pet_id===pet.id).map(i=><li key={i.id}>{i.label}</li>)}</ul> : <Empty text="No pet-specific checklist items yet." />}</div>;
   return <div style={S.stack}>{visits.length ? visits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} />) : <Empty text="No visit history for this pet yet." />}</div>;
 }
-function VisitHistoryRow({ visit, service, pets, onDeleteVisit }) { return <div style={S.visitHistory}><div><b>{niceDate(visit.visit_date)} {visit.scheduled_start_time || ""}</b><div style={S.muted}>{service?.name || "Service"} · {pets.map(p=>p.name).join(", ")}</div></div><div style={S.status}>{visit.status}</div><div><b>{money(visit.total_amount)}</b></div>{onDeleteVisit && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>; }
+function VisitHistoryRow({ visit, service, pets, onDeleteVisit }) { return <div style={S.visitHistory}><div><b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b><div style={S.muted}>{service?.name || "Service"} · {pets.map(p=>p.name).join(", ")}</div></div><div style={S.status}>{visit.status}</div><div><b>{money(visit.total_amount)}</b></div>{onDeleteVisit && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>; }
 function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onMarkPaid, onMarkUnpaid, onMarkManyPaid }) {
   const completed = visits.filter(v=>v.status==="Completed");
-  const unpaid = completed.filter(v=>!v.is_paid);
-  const paid = completed.filter(v=>v.is_paid);
+  const [billingFilter, setBillingFilter] = useState("unpaid");
+  const [billingRange, setBillingRange] = useState("all");
+  const today = todayISO();
+  const monthPrefix = today.slice(0,7);
+  const yearPrefix = today.slice(0,4);
+  const ranged = completed.filter(v => billingRange === "month" ? String(v.visit_date || "").startsWith(monthPrefix) : billingRange === "year" ? String(v.visit_date || "").startsWith(yearPrefix) : true);
+  const unpaid = ranged.filter(v=>!v.is_paid);
+  const paid = ranged.filter(v=>v.is_paid);
+  const previewRows = billingFilter === "paid" ? paid : billingFilter === "all" ? ranged : unpaid;
   const [selected, setSelected] = useState([]);
   function toggle(id) { setSelected(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); }
   function ownerStatementText(rows, title) {
@@ -738,7 +1037,18 @@ function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onM
   const unpaidText = ownerStatementText(unpaid, "Invoice / Unpaid Statement");
   const statementText = ownerStatementText(completed, "Owner Statement");
   return <div style={S.stack}>
-    <div style={S.row}><button style={S.primaryBtn} onClick={()=>printTextDocument(`${owner?.name || "Owner"} Invoice`, unpaidText)}>Print Invoice</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Invoice`, unpaidText, owner?.invoice_email || owner?.email)}>Email Invoice</button><button style={S.secondaryBtn} onClick={()=>printTextDocument(`${owner?.name || "Owner"} Statement`, statementText)}>Print Statement</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Statement`, statementText, owner?.invoice_email || owner?.email)}>Email Statement</button></div>
+    <Panel title="Billing Preview"><div style={S.formGrid}>
+      <Field label="Date range"><select value={billingRange} onChange={e=>setBillingRange(e.target.value)}><option value="all">All time</option><option value="month">This month</option><option value="year">This year</option></select></Field>
+      <Field label="Show"><select value={billingFilter} onChange={e=>setBillingFilter(e.target.value)}><option value="unpaid">Unpaid only</option><option value="paid">Paid only</option><option value="all">All completed</option></select></Field>
+    </div><div style={S.stack}>{previewRows.length ? previewRows.slice(0,20).map(v=>{
+      const oneText = singleVisitBillingText(owner, v, visitPets, petMap, serviceMap, "Individual Invoice");
+      return <div key={v.id} style={S.billingRowCompact}>
+        <div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div>
+        <b>{money(v.total_amount)}</b><small>{v.is_paid ? "Paid" : "Unpaid"}</small>
+        <div style={S.row}><button style={S.secondaryMini} onClick={()=>printTextDocument(`${owner?.name || "Owner"} Individual Invoice`, oneText)}>Print This Invoice</button><button style={S.secondaryMini} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Individual Invoice`, oneText, owner?.invoice_email || owner?.email)}>Email This Invoice</button></div>
+      </div>;
+    }) : <Empty text="No visits match this preview." />}</div></Panel>
+    <div style={S.row}><button style={S.primaryBtn} onClick={()=>printTextDocument(`${owner?.name || "Owner"} Unpaid Invoice`, unpaidText)}>Print All Unpaid</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Unpaid Invoice`, unpaidText, owner?.invoice_email || owner?.email)}>Email All Unpaid</button><button style={S.secondaryBtn} onClick={()=>printTextDocument(`${owner?.name || "Owner"} Statement`, statementText)}>Print Statement</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Statement`, statementText, owner?.invoice_email || owner?.email)}>Email Statement</button></div>
     <div style={S.infoGrid}>
       <InfoLine label="Owner" value={owner?.name} />
       <InfoLine label="Completed visits" value={completed.length} />
@@ -751,11 +1061,11 @@ function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onM
     <Panel title="Unpaid Completed Visits">
       {unpaid.length ? <div style={S.stack}>
         <div style={S.row}><button style={S.primaryBtn} onClick={()=>onMarkManyPaid(selected)}>Mark Selected Paid</button><button style={S.secondaryBtn} onClick={()=>setSelected(unpaid.map(v=>v.id))}>Select All</button><button style={S.secondaryBtn} onClick={()=>setSelected([])}>Clear</button></div>
-        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.check}><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> Select</label><div><b>{niceDate(v.visit_date)} {v.scheduled_start_time || ""}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(v.total_amount)}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
+        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.check}><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> Select</label><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(v.total_amount)}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
       </div> : <Empty text="No unpaid completed visits for this owner." />}
     </Panel>
     <Panel title="Paid Visits">
-      {paid.length ? paid.slice(0,25).map(v=><div key={v.id} style={S.billingRowCompact}><div><b>{niceDate(v.visit_date)} {v.scheduled_start_time || ""}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} · {v.payment_method || "No method"}</div></div><b>{money(v.total_amount)}</b><small>{v.paid_at ? niceDate(String(v.paid_at).slice(0,10)) : "Paid"}</small><button style={S.secondaryMini} onClick={()=>onMarkUnpaid(v.id)}>Mark Unpaid</button></div>) : <Empty text="No paid visits yet." />}
+      {paid.length ? paid.slice(0,25).map(v=><div key={v.id} style={S.billingRowCompact}><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} · {v.payment_method || "No method"}</div></div><b>{money(v.total_amount)}</b><small>{v.paid_at ? niceDate(String(v.paid_at).slice(0,10)) : "Paid"}</small><button style={S.secondaryMini} onClick={()=>onMarkUnpaid(v.id)}>Mark Unpaid</button></div>) : <Empty text="No paid visits yet." />}
     </Panel>
   </div>;
 }
@@ -763,7 +1073,7 @@ function OwnerForm({ value, onChange }) {
   return <div style={S.stack}>
     <div style={S.formGrid}>
       {[
-        ["name", "Owner name"], ["phone", "Phone"], ["email", "Email"], ["address", "Address"], ["default_mileage", "Default mileage"]
+        ["name", "Owner name"], ["phone", "Phone"], ["email", "Email"], ["address", "Address"]
       ].map(([k,label])=><Field key={k} label={label}><input type={k.includes("mileage")?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}
       <Field label="Access instructions"><textarea value={value.access_instructions||""} onChange={e=>onChange({...value,access_instructions:e.target.value})}/></Field>
     </div>
@@ -798,7 +1108,7 @@ function PetForm({ value, onChange, vetClinics = [], onSaveVetClinic }) {
     </div>
 
     <div style={S.formGrid}>
-      {[["name","Pet name"],["species","Species"],["breed","Breed"],["age_text","Age"],["default_mileage","Default mileage"]].map(([k,label])=><Field key={k} label={label}><input type={k.includes("mileage")?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}
+      {[["name","Pet name"],["species","Species"],["breed","Breed"],["age_text","Age"]].map(([k,label])=><Field key={k} label={label}><input type={k.includes("mileage")?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}
       <Field label="Vet clinic"><select value={value.vet_clinic_id || ""} onChange={e=>onChange({...value,vet_clinic_id:e.target.value})}><option value="">Select vet clinic</option>{vetClinics.map(v=><option key={v.id} value={v.id}>{v.clinic_name}</option>)}</select></Field>
       <Field label="Emergency instructions"><textarea value={value.emergency_instructions||""} onChange={e=>onChange({...value,emergency_instructions:e.target.value})}/></Field>
     </div>
@@ -849,5 +1159,5 @@ function PetMini({ pet, active, onClick, onInfo }) { return <div style={active?S
 
 const S = {
   app:{minHeight:"100svh",background:"linear-gradient(180deg,#fffaf6,#f7fbff)",color:"#1f2937",paddingBottom:92,fontFamily:"system-ui,Segoe UI,Roboto,sans-serif"},
-  header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"10px 12px 4px",maxWidth:720,margin:"0 auto"}, kicker:{display:"none"}, title:{fontSize:26,margin:0,fontWeight:850,color:"#211816",lineHeight:1.05}, main:{maxWidth:720,margin:"0 auto",padding:"8px 10px 30px",overflowX:"hidden"}, stack:{display:"grid",gap:14}, grid3:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}, twoCol:{display:"grid",gridTemplateColumns:"1fr",gap:12}, twoColBalanced:{display:"grid",gridTemplateColumns:"1fr",gap:12}, subTabs:{display:"flex",gap:8,flexWrap:"wrap",margin:"8px 0 14px"}, subTab:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"9px 12px",fontWeight:800}, subTabActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"9px 12px",fontWeight:900,color:"#763b15"}, detailBox:{border:"1px solid #eadfd6",borderRadius:20,padding:14,background:"#fffdfb",display:"grid",gap:12}, infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:8}, visitHistory:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, card:{background:"rgba(255,255,255,.92)",border:"1px solid #eadfd6",borderRadius:22,padding:16,boxShadow:"0 12px 30px rgba(70,50,35,.08)",textAlign:"left"}, metric:{background:"#fff",border:"1px solid #eadfd6",borderRadius:20,padding:16,textAlign:"left",boxShadow:"0 10px 22px rgba(70,50,35,.06)",display:"grid",gap:3}, muted:{color:"#6b7280"}, error:{maxWidth:1180,margin:"8px auto",padding:12,borderRadius:14,background:"#fff1f2",color:"#9f1239",textAlign:"left"}, toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#15251d",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"}, saving:{position:"fixed",right:16,bottom:95,background:"#111827",color:"#fff",padding:"10px 14px",borderRadius:14,zIndex:60}, bottomNav:{position:"fixed",bottom:0,left:0,right:0,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"8px 8px calc(8px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.95)",borderTop:"1px solid #eadfd6",backdropFilter:"blur(12px)",zIndex:40}, navBtn:{border:"1px solid #e7d8ca",background:"#fff",borderRadius:16,padding:"12px 4px",fontWeight:850,color:"#6b5b50",fontSize:14}, navActive:{border:"1px solid #d99058",background:"#fff2e8",borderRadius:16,padding:"12px 4px",fontWeight:900,color:"#763b15",fontSize:14,boxShadow:"0 8px 16px rgba(217,144,88,.2)"}, primaryBtn:{border:0,background:"#d9783f",color:"#fff",borderRadius:16,padding:"12px 16px",fontWeight:900}, secondaryBtn:{border:"1px solid #d9c7b8",background:"#fff",color:"#53392a",borderRadius:16,padding:"11px 14px",fontWeight:800}, ghostBtn:{border:"1px solid #e4d6c9",background:"rgba(255,255,255,.65)",borderRadius:14,padding:"10px 12px",fontWeight:800}, dangerBtn:{border:0,background:"#b91c1c",color:"#fff",borderRadius:16,padding:"11px 14px",fontWeight:800}, primaryMini:{border:0,background:"#d9783f",color:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800}, secondaryMini:{border:"1px solid #d9c7b8",background:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800}, dangerMini:{border:0,background:"#fee2e2",color:"#991b1b",borderRadius:12,padding:"8px 10px",fontWeight:800}, formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:10}, field:{display:"grid",gap:5,fontWeight:800,color:"#544236"}, check:{display:"flex",gap:8,alignItems:"center",fontWeight:750}, row:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}, list:{display:"grid",gap:8,maxHeight:420,overflow:"auto"}, listBtn:{textAlign:"left",border:"1px solid #eadfd6",background:"#fff",borderRadius:15,padding:12,display:"grid",gap:3}, listActive:{textAlign:"left",border:"1px solid #d99058",background:"#fff2e8",borderRadius:15,padding:12,display:"grid",gap:3}, petCards:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}, petCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:18,padding:12,display:"grid",gap:7}, petCardActive:{border:"2px solid #d9783f",background:"#fff7ef",borderRadius:18,padding:12,display:"grid",gap:7}, petPhoto:{width:62,height:62,borderRadius:18,objectFit:"cover"}, petPhotoBig:{width:"100%",maxHeight:260,borderRadius:22,objectFit:"cover"}, photoSmall:{width:62,height:62,borderRadius:18,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900,fontSize:26}, photoBlank:{height:140,borderRadius:20,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900}, petPickWrap:{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0"}, pickBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, pickActive:{border:"1px solid #d9783f",background:"#fff2e8",color:"#763b15",borderRadius:999,padding:"10px 13px",fontWeight:900}, cards:{display:"grid",gridTemplateColumns:"1fr",gap:10,marginTop:10}, smallCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:17,padding:12,display:"grid",gap:5}, visitCard:{border:"1px solid #eadfd6",borderRadius:18,padding:13,display:"grid",gridTemplateColumns:"1fr",gap:10,alignItems:"start",marginTop:10}, cardActions:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,alignItems:"stretch",width:"100%"}, petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}, petChip:{border:0,background:"#e9f7ef",borderRadius:999,padding:"6px 9px",fontWeight:800,color:"#14532d"}, status:{fontSize:12,fontWeight:900,color:"#6b7280"}, officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}, officeBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, officeActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"10px 13px",fontWeight:900}, reportRow:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,alignItems:"center",borderBottom:"1px solid #f0e4da",padding:"10px 0"}, billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, checklistRow:{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:10,alignItems:"center",border:"1px solid #f0e4da",borderRadius:12,padding:10,background:"#fff"}, subList:{gridColumn:"1/-1",display:"flex",gap:6,flexWrap:"wrap",color:"#6b7280"}, modalShade:{position:"fixed",inset:0,background:"rgba(30,20,10,.38)",zIndex:80,display:"grid",placeItems:"center",padding:14}, modal:{width:"min(900px,100%)",maxHeight:"88svh",overflow:"auto",background:"#fff",borderRadius:24,padding:16,boxShadow:"0 30px 80px rgba(0,0,0,.25)",textAlign:"left"}, modalHead:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",borderBottom:"1px solid #eee",paddingBottom:10,marginBottom:12}, photoPickerBox:{border:"1px solid #eadfd6",borderRadius:20,padding:12,background:"#fff",display:"grid",gap:10}, petInfo:{display:"grid",gap:10}, info:{border:"1px solid #e5e7eb",borderRadius:14,padding:12,background:"#fff"}, infoDanger:{border:"1px solid #fecaca",borderRadius:14,padding:12,background:"#fff1f2"}, collapse:{border:"1px solid #eadfd6",borderRadius:16,padding:0,background:"#fff"}, collapseSummary:{listStyle:"none",cursor:"pointer",padding:"13px 14px",fontWeight:900,color:"#53392a"},
+  header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"10px 12px 4px",maxWidth:720,margin:"0 auto"}, kicker:{display:"none"}, title:{fontSize:26,margin:0,fontWeight:850,color:"#211816",lineHeight:1.05}, main:{maxWidth:720,margin:"0 auto",padding:"8px 10px 30px",overflowX:"hidden"}, stack:{display:"grid",gap:14}, grid3:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}, twoCol:{display:"grid",gridTemplateColumns:"1fr",gap:12}, twoColBalanced:{display:"grid",gridTemplateColumns:"1fr",gap:12}, subTabs:{display:"flex",gap:8,flexWrap:"wrap",margin:"8px 0 14px"}, subTab:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"9px 12px",fontWeight:800}, subTabActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"9px 12px",fontWeight:900,color:"#763b15"}, detailBox:{border:"1px solid #eadfd6",borderRadius:20,padding:14,background:"#fffdfb",display:"grid",gap:12}, infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:8}, visitHistory:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, card:{background:"rgba(255,255,255,.92)",border:"1px solid #eadfd6",borderRadius:22,padding:16,boxShadow:"0 12px 30px rgba(70,50,35,.08)",textAlign:"left"}, metric:{background:"#fff",border:"1px solid #eadfd6",borderRadius:20,padding:16,textAlign:"left",boxShadow:"0 10px 22px rgba(70,50,35,.06)",display:"grid",gap:3}, muted:{color:"#6b7280"}, error:{maxWidth:1180,margin:"8px auto",padding:12,borderRadius:14,background:"#fff1f2",color:"#9f1239",textAlign:"left"}, toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#15251d",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"}, saving:{position:"fixed",right:16,bottom:95,background:"#111827",color:"#fff",padding:"10px 14px",borderRadius:14,zIndex:60}, bottomNav:{position:"fixed",bottom:0,left:0,right:0,display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"8px 8px calc(8px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.95)",borderTop:"1px solid #eadfd6",backdropFilter:"blur(12px)",zIndex:40}, navBtn:{border:"1px solid #e7d8ca",background:"#fff",borderRadius:16,padding:"12px 4px",fontWeight:850,color:"#6b5b50",fontSize:14}, navActive:{border:"1px solid #d99058",background:"#fff2e8",borderRadius:16,padding:"12px 4px",fontWeight:900,color:"#763b15",fontSize:14,boxShadow:"0 8px 16px rgba(217,144,88,.2)"}, primaryBtn:{border:0,background:"#d9783f",color:"#fff",borderRadius:16,padding:"12px 16px",fontWeight:900}, secondaryBtn:{border:"1px solid #d9c7b8",background:"#fff",color:"#53392a",borderRadius:16,padding:"11px 14px",fontWeight:800}, ghostBtn:{border:"1px solid #e4d6c9",background:"rgba(255,255,255,.65)",borderRadius:14,padding:"10px 12px",fontWeight:800}, refreshBtn:{border:"1px solid #e4d6c9",background:"rgba(255,255,255,.75)",borderRadius:999,padding:"7px 10px",fontWeight:900,fontSize:18,minWidth:42}, dangerBtn:{border:0,background:"#b91c1c",color:"#fff",borderRadius:16,padding:"11px 14px",fontWeight:800}, primaryMini:{border:0,background:"#d9783f",color:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800}, secondaryMini:{border:"1px solid #d9c7b8",background:"#fff",borderRadius:12,padding:"8px 10px",fontWeight:800}, dangerMini:{border:0,background:"#fee2e2",color:"#991b1b",borderRadius:12,padding:"8px 10px",fontWeight:800}, formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:10}, formGridPadded:{display:"grid",gridTemplateColumns:"1fr",gap:10,padding:"0 14px 14px"}, field:{display:"grid",gap:5,fontWeight:800,color:"#544236"}, check:{display:"flex",gap:8,alignItems:"center",fontWeight:750}, compactChecklist:{display:"grid",gap:8}, checkCompact:{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:10,alignItems:"center",fontWeight:800,textAlign:"left"}, checkboxSmall:{width:18,height:18,minHeight:18,margin:0,padding:0}, row:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}, list:{display:"grid",gap:8,maxHeight:420,overflow:"auto"}, listBtn:{textAlign:"left",border:"1px solid #eadfd6",background:"#fff",borderRadius:15,padding:12,display:"grid",gap:3}, listActive:{textAlign:"left",border:"1px solid #d99058",background:"#fff2e8",borderRadius:15,padding:12,display:"grid",gap:3}, petCards:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}, petCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:18,padding:12,display:"grid",gap:7}, petCardActive:{border:"2px solid #d9783f",background:"#fff7ef",borderRadius:18,padding:12,display:"grid",gap:7}, petPhoto:{width:62,height:62,borderRadius:18,objectFit:"cover"}, petPhotoBig:{width:"100%",maxHeight:260,borderRadius:22,objectFit:"cover"}, photoSmall:{width:62,height:62,borderRadius:18,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900,fontSize:26}, photoBlank:{height:140,borderRadius:20,background:"#f2e2d2",display:"grid",placeItems:"center",fontWeight:900}, selectedPetNotice:{border:"1px solid #eadfd6",background:"#fffaf6",borderRadius:14,padding:"10px 12px",fontWeight:850,color:"#53392a",textAlign:"left"}, petPickWrap:{display:"flex",gap:8,flexWrap:"wrap",margin:"10px 0"}, petPickDog:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickDogActive:{border:"2px solid #d9783f",background:"#fff2e8",color:"#763b15",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(217,120,63,.18)"}, petPickCat:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickCatActive:{border:"2px solid #8b5cf6",background:"#f5f3ff",color:"#4c1d95",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(139,92,246,.15)"}, petPickOther:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800,display:"inline-flex",gap:6,alignItems:"center"}, petPickOtherActive:{border:"2px solid #059669",background:"#ecfdf5",color:"#065f46",borderRadius:999,padding:"9px 12px",fontWeight:950,display:"inline-flex",gap:6,alignItems:"center",boxShadow:"0 8px 18px rgba(5,150,105,.14)"}, pickBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, pickActive:{border:"1px solid #d9783f",background:"#fff2e8",color:"#763b15",borderRadius:999,padding:"10px 13px",fontWeight:900}, cards:{display:"grid",gridTemplateColumns:"1fr",gap:10,marginTop:10}, smallCard:{border:"1px solid #eadfd6",background:"#fff",borderRadius:17,padding:12,display:"grid",gap:5}, visitCard:{border:"1px solid #eadfd6",borderRadius:18,padding:13,display:"grid",gridTemplateColumns:"1fr",gap:10,alignItems:"start",marginTop:10}, cardActions:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,alignItems:"stretch",width:"100%"}, moreActions:{border:"1px solid #f0e4da",borderRadius:14,background:"#fffaf6",padding:0}, moreSummary:{listStyle:"none",cursor:"pointer",padding:"10px 12px",fontWeight:900,color:"#6b4b39"}, moreActionBody:{display:"grid",gridTemplateColumns:"1fr",gap:8,padding:"0 10px 10px"}, petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}, petChip:{border:0,background:"#e9f7ef",borderRadius:999,padding:"6px 9px",fontWeight:800,color:"#14532d"}, status:{fontSize:12,fontWeight:900,color:"#6b7280"}, officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}, officeBtn:{border:"1px solid #e1d2c5",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:800}, officeActive:{border:"1px solid #d9783f",background:"#fff2e8",borderRadius:999,padding:"10px 13px",fontWeight:900}, reportRow:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,alignItems:"center",borderBottom:"1px solid #f0e4da",padding:"10px 0"}, billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #f0e4da",borderRadius:14,padding:10,background:"#fff"}, checklistRow:{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:10,alignItems:"center",border:"1px solid #f0e4da",borderRadius:12,padding:10,background:"#fff"}, subList:{gridColumn:"1/-1",display:"flex",gap:6,flexWrap:"wrap",color:"#6b7280"}, modalShade:{position:"fixed",inset:0,background:"rgba(30,20,10,.38)",zIndex:80,display:"grid",placeItems:"center",padding:14}, modal:{width:"min(900px,100%)",maxHeight:"88svh",overflow:"auto",background:"#fff",borderRadius:24,padding:16,boxShadow:"0 30px 80px rgba(0,0,0,.25)",textAlign:"left"}, modalHead:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",borderBottom:"1px solid #eee",paddingBottom:10,marginBottom:12}, photoPickerBox:{border:"1px solid #eadfd6",borderRadius:20,padding:12,background:"#fff",display:"grid",gap:10}, petInfo:{display:"grid",gap:10}, info:{border:"1px solid #e5e7eb",borderRadius:14,padding:12,background:"#fff"}, infoDanger:{border:"1px solid #fecaca",borderRadius:14,padding:12,background:"#fff1f2"}, collapse:{border:"1px solid #eadfd6",borderRadius:16,padding:0,background:"#fff"}, collapseSummary:{listStyle:"none",cursor:"pointer",padding:"13px 14px",fontWeight:900,color:"#53392a"},
 };
