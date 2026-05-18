@@ -201,3 +201,43 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* V9 mobile-first cleanup */
+html, body, #root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #cfc3b9;
+  background: #fff;
+}
+
+textarea {
+  min-height: 88px;
+}
+
+button,
+select,
+input,
+textarea {
+  font-size: 16px;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+summary::after {
+  content: ' +';
+  float: right;
+}
+details[open] summary::after {
+  content: ' –';
+}
