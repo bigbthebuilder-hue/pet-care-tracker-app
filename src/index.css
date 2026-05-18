@@ -317,3 +317,16 @@ button { transition: transform .16s ease, box-shadow .16s ease, border-color .16
 button:active { transform: scale(.97); }
 a[href^="tel:"] { touch-action: manipulation; }
 @keyframes softPulse { 0%,100% { box-shadow: 0 8px 18px rgba(15,98,254,.16); } 50% { box-shadow: 0 12px 28px rgba(15,98,254,.28); } }
+
+/* V17 compact mobile controls */
+input[type="checkbox"] {
+  width: 20px !important;
+  max-width: 20px !important;
+  min-width: 20px !important;
+  height: 20px !important;
+  min-height: 20px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 5px !important;
+  flex: 0 0 20px !important;
+}

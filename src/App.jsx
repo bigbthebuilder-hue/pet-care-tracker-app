@@ -127,6 +127,15 @@ export default function App() {
 
   useEffect(() => { loadAll(); }, []);
 
+  function scrollToTopNow() {
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+
+  function changeMainTab(nextTab) {
+    setTab(nextTab);
+    scrollToTopNow();
+  }
+
   async function loadAll() {
     setLoading(true); setError("");
     try {
@@ -158,7 +167,8 @@ export default function App() {
   async function saveRow(table, row, label = "Saved") {
     setSaving(true); setError("");
     try {
-      const clean = { ...row, updated_at: nowIso() };
+      const noUpdatedAtTables = new Set(["pet_service_checklist_items", "pet_pet_checklist_items", "pet_visit_checklist_items", "pet_travel"]);
+      const clean = noUpdatedAtTables.has(table) ? { ...row } : { ...row, updated_at: nowIso() };
       Object.keys(clean).forEach(k => clean[k] === "" && ["birthdate", "service_id", "saved_option_id", "primary_pet_id", "vet_clinic_id", "owner_id", "visit_id"].includes(k) ? clean[k] = null : null);
       const q = clean.id ? supabase.from(table).update(clean).eq("id", clean.id).select().single() : supabase.from(table).insert(clean).select().single();
       const { error: err } = await q;
@@ -167,6 +177,33 @@ export default function App() {
     } catch (e) { setError(tableError(e)); }
     setSaving(false);
   }
+
+  async function saveServiceWithChecklist(service, draftItems = []) {
+    setSaving(true); setError("");
+    try {
+      const cleanService = { ...service, updated_at: nowIso() };
+      const serviceQuery = cleanService.id
+        ? supabase.from("pet_services").update(cleanService).eq("id", cleanService.id).select().single()
+        : supabase.from("pet_services").insert(cleanService).select().single();
+      const { data: savedService, error: serviceErr } = await serviceQuery;
+      if (serviceErr) throw serviceErr;
+      const serviceId = savedService?.id || cleanService.id;
+      if (serviceId) {
+        const cleanedItems = (draftItems || [])
+          .map((item, idx) => ({ service_id: serviceId, label: String(item.label || "").trim(), sort_order: (idx + 1) * 10, is_active: item.is_active !== false }))
+          .filter(item => item.label);
+        const { error: delErr } = await supabase.from("pet_service_checklist_items").delete().eq("service_id", serviceId);
+        if (delErr) throw delErr;
+        if (cleanedItems.length) {
+          const { error: insertErr } = await supabase.from("pet_service_checklist_items").insert(cleanedItems);
+          if (insertErr) throw insertErr;
+        }
+      }
+      setToast("Service saved"); await loadAll();
+    } catch (e) { setError(tableError(e)); }
+    setSaving(false);
+  }
+
   function requestDelete(table, row, type, label) {
     if (!row?.id) return;
     setDeleteRequest({ table, row, type, label: label || row.name || type || "item", typed: "" });
@@ -358,10 +395,10 @@ export default function App() {
       {tab === "Today" && <TodayPage visits={todayVisits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Schedule" && <SchedulePage owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
-      {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
+      {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onSaveServiceWithChecklist={saveServiceWithChecklist} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onDeleteTravel={(t)=>requestDelete("pet_travel", t, "travel", `${niceDate(t.travel_date)} ${t.mileage || 0} km`)} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
     </main>}
 
-    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => setTab(t)} style={tab === t ? S.navActive : S.navBtn}>{t}</button>)}</nav>
+    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => changeMainTab(t)} style={tab === t ? S.navActive : S.navBtn}>{t}</button>)}</nav>
 
     {infoPet && <PetInfoModal pet={infoPet} owner={ownerMap[infoPet.owner_id]} vetClinic={vetClinics.find(v=>v.id===infoPet.vet_clinic_id)} onClose={() => setPetInfoId("")} />}
     {paymentVisit && <PaymentModal visit={paymentVisit} owner={ownerMap[paymentVisit.owner_id]} service={serviceMap[paymentVisit.service_id]} onClose={() => setPaymentVisitId("")} onSave={savePayment} />}
@@ -374,10 +411,12 @@ export default function App() {
 function TodayPage({ visits, activeVisits, overdueVisits, owners, pets, services, visitPets, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
   const todayRevenue = visits.filter(v=>v.status === "Completed").reduce((s,v)=>s+num(v.total_amount),0);
   return <section style={S.stack}>
-    <div style={S.grid3}>
-      <Metric title="Today" value={`${visits.length} visits`} sub={`${visits.filter(v=>v.status==='Scheduled').length} scheduled`} />
-      <Metric title="Active" value={`${activeVisits.length}`} sub="services in progress" />
-      <Metric title="Completed $" value={money(todayRevenue)} sub="today" />
+    <div style={S.compactHeaderStats}>
+      <span><b>{visits.length}</b> visits</span>
+      <span>·</span>
+      <span><b>{activeVisits.length}</b> active</span>
+      <span>·</span>
+      <span><b>{money(todayRevenue)}</b> today</span>
     </div>
     {activeVisits.length > 0 && <Panel title="In Progress Now">{activeVisits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />)}</Panel>}
     {overdueVisits.length > 0 && <Panel title="Overdue Scheduled Services">{overdueVisits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />)}</Panel>}
@@ -448,6 +487,10 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
           <Field label="Visit notes"><textarea value={form.internal_notes || ""} onChange={e=>setForm({...form, internal_notes:e.target.value})} /></Field>
         </div>
       </details>
+      <div style={S.row}>
+        <button style={S.primaryBtn} onClick={()=>{ editingVisitId ? onUpdate(editingVisitId, form, petIds).then(()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }) : onAdd(form, petIds); }} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
+        {editingVisitId && <button style={S.secondaryBtn} onClick={()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel Edit</button>}
+      </div>
       {form.owner_id && <div style={S.detailBox}>
         <b>Recent visits for this owner</b>
         {ownerRecentVisits.length ? ownerRecentVisits.map(v => <div key={v.id} style={S.recentVisitRow}>
@@ -457,10 +500,6 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
           <button style={S.secondaryMini} onClick={()=>onRepeatVisit(v.id)}>Use as Template</button>
         </div>) : <Empty text="No recent visits for this owner yet." />}
       </div>}
-      <div style={S.row}>
-        <button style={S.primaryBtn} onClick={()=>{ editingVisitId ? onUpdate(editingVisitId, form, petIds).then(()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }) : onAdd(form, petIds); }} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
-        {editingVisitId && <button style={S.secondaryBtn} onClick={()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel Edit</button>}
-      </div>
     </Panel>
     <Panel title="Upcoming / Active Visits">{visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text="No upcoming visits yet." />}</Panel>
     <Panel title="Recently Completed Visits">
@@ -516,7 +555,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
     <div style={S.twoColBalanced}>
       <Panel title="Pet Owners">
         <button style={S.primaryBtn} onClick={newOwner}>New Owner</button>
-        <div style={S.list}>{owners.map(o=><button key={o.id} style={selectedOwnerId===o.id?S.listActive:S.listBtn} onClick={()=>{setSelectedOwnerId(o.id); setSelectedPetId(""); setOwnerEditMode(false); setOwnerTab("Owner Info");}}>{o.name || "Unnamed owner"}<small>{o.phone || o.email || "No contact info"}</small></button>)}</div>
+        <div style={S.list}>{owners.map(o=><button key={o.id} style={selectedOwnerId===o.id?S.listActive:S.listBtn} onClick={()=>{setSelectedOwnerId(o.id); setSelectedPetId(""); setOwnerEditMode(false); setOwnerTab("Owner Info"); window.scrollTo({top:0,behavior:"smooth"});}}>{o.name || "Unnamed owner"}<small>{o.phone || o.email || "No contact info"}</small></button>)}</div>
       </Panel>
 
       {!selectedOwnerId && ownerEditMode && <Panel title="New Owner">
@@ -526,7 +565,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 
       {selectedOwnerId && <Panel title="">
         <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
-        <div style={S.subTabs}>{OWNER_TABS.map(t=><button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}>{t}</button>)}</div>
+        <div style={S.subTabs}>{OWNER_TABS.map(t=><button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
 
         {ownerTab === "Owner Info" && <div style={S.stack}>
           {!ownerEditMode ? <OwnerSummary owner={selectedOwner} /> : <OwnerForm value={ownerForm} onChange={setOwnerForm} />}
@@ -537,7 +576,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
           <div style={S.row}><button style={S.primaryBtn} onClick={newPet}>Add Pet</button><span style={S.muted}>Each pet has its own profile, care notes, emergency info, checklist, and history.</span></div>
           <div style={S.petCards}>{ownerPets.map(p=><PetMini key={p.id} pet={p} active={selectedPetId===p.id} onClick={()=>{setSelectedPetId(p.id); setPetEditMode(false);}} onInfo={()=>onPetInfo(p.id)} />)}</div>
           {(selectedPet || petEditMode) && <div style={S.detailBox}>
-            <div style={S.subTabs}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false);}}>{t}</button>)}</div>
+            <div style={S.subTabs}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
             {!petEditMode ? <PetReadOnly pet={selectedPet} petTab={petTab} visits={petVisits} serviceMap={serviceMap} visitPets={visitPets} petMap={petMap} petChecklist={petChecklist} vetClinics={vetClinics} /> : <PetForm value={petForm} onChange={setPetForm} vetClinics={vetClinics} onSaveVetClinic={onSaveVetClinic} />}
             <div style={S.row}>{!petEditMode ? <button style={S.secondaryBtn} onClick={()=>setPetEditMode(true)}>Edit Pet</button> : <button style={S.primaryBtn} onClick={()=>{onSavePet({...petForm, owner_id:selectedOwnerId}); setPetEditMode(false);}}>Save Pet</button>}{selectedPet?.id && <><button style={S.secondaryBtn} onClick={()=>onPetInfo(selectedPet.id)}>Emergency Info</button></>}</div>
             {selectedPet?.id && <div style={S.dangerZone}><b>Danger zone</b><small>Deleting a pet requires typing the exact pet name.</small><button style={S.dangerMini} onClick={()=>onDeletePet(selectedPet)}>Delete Pet</button></div>}
@@ -566,7 +605,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 function OfficePage(props) {
   const { officeTab, setOfficeTab } = props;
   return <section style={S.stack}>
-    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>setOfficeTab(t)}>{t}</button>)}</div>
+    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>{setOfficeTab(t); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
     {officeTab === "Reports" && <Reports {...props} />}
     {officeTab === "Services" && <ServicesAdmin {...props} />}
     {officeTab === "Vets" && <VetClinicsAdmin {...props} />}
@@ -860,21 +899,50 @@ function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap
     {preview && <PrintPreviewOverlay title="Report Print Preview" onClose={()=>setPreview(null)} onEmail={emailReport}><PetReportDocument preview={reportData} settings={settings} /></PrintPreviewOverlay>}
   </div>;
 }
-function ServicesAdmin({ services, serviceChecklist, onSaveService, onAddServiceChecklist, onDeleteServiceChecklist, onDeleteService }) {
+function ServicesAdmin({ services, serviceChecklist, onSaveService, onSaveServiceWithChecklist, onDeleteService }) {
   const [form, setForm] = useState(blankService);
   const [item, setItem] = useState("");
-  const selectedItems = form.id ? serviceChecklist.filter(i=>i.service_id===form.id).sort((a,b)=>num(a.sort_order)-num(b.sort_order)) : [];
+  const [draftItems, setDraftItems] = useState([]);
+  const selectedSavedItems = form.id ? serviceChecklist.filter(i=>i.service_id===form.id).sort((a,b)=>num(a.sort_order)-num(b.sort_order)) : [];
+  useEffect(() => {
+    setDraftItems(selectedSavedItems.map(i => ({ ...i })));
+    setItem("");
+  }, [form.id, serviceChecklist.length]);
+  function chooseService(service) {
+    setForm(service);
+    setDraftItems(serviceChecklist.filter(i=>i.service_id===service.id).sort((a,b)=>num(a.sort_order)-num(b.sort_order)).map(i => ({ ...i })));
+    setItem("");
+  }
+  function addDraftItem() {
+    const label = item.trim();
+    if (!label) return;
+    setDraftItems(prev => [...prev, { temp_id:`tmp-${Date.now()}`, label, sort_order:(prev.length + 1) * 10, is_active:true }]);
+    setItem("");
+  }
+  function removeDraftItem(idx) {
+    setDraftItems(prev => prev.filter((_, i) => i !== idx));
+  }
+  function updateDraftItem(idx, label) {
+    setDraftItems(prev => prev.map((x, i) => i === idx ? { ...x, label } : x));
+  }
+  async function saveAll() {
+    if (onSaveServiceWithChecklist) return onSaveServiceWithChecklist(form, draftItems);
+    return onSaveService(form);
+  }
   return <Panel title="Services & Pricing">
     <p style={S.muted}>Sort order is hidden now. It only controls the display order of service cards.</p>
     <ServiceForm value={form} onChange={setForm} />
-    <div style={S.row}><button style={S.primaryBtn} onClick={()=>onSaveService(form)}>Save Service</button><button style={S.secondaryBtn} onClick={()=>setForm(blankService)}>New</button>{form.id&&<button style={S.dangerBtn} onClick={()=>onDeleteService(form)}>Delete</button>}</div>
     {form.id && <div style={S.detailBox}>
       <b>Checklist for {form.name}</b>
-      <small style={S.muted}>These items are copied into each visit when this service is scheduled. Add/remove items here before scheduling future visits.</small>
-      {selectedItems.length ? selectedItems.map(i=><div key={i.id} style={S.checklistRow}><span>{i.label}</span><button style={S.dangerMini} onClick={()=>onDeleteServiceChecklist(i)}>Remove</button></div>) : <Empty text="No checklist items for this service yet." />}
-      <div style={S.row}><input placeholder="New checklist item" value={item} onChange={e=>setItem(e.target.value)} /><button style={S.secondaryBtn} onClick={()=>{ if(item.trim()){ onAddServiceChecklist({service_id:form.id,label:item.trim(),sort_order:selectedItems.length*10,is_active:true}); setItem(""); }}}>Add Checklist Item</button></div>
+      <small style={S.muted}>Make all checklist changes here, then tap Save Service once. The editor will not auto-close after each item.</small>
+      {draftItems.length ? draftItems.map((i, idx)=><div key={i.id || i.temp_id || idx} style={S.checklistRow}>
+        <input value={i.label || ""} onChange={e=>updateDraftItem(idx, e.target.value)} />
+        <button style={S.dangerMini} onClick={()=>removeDraftItem(idx)}>Remove</button>
+      </div>) : <Empty text="No checklist items for this service yet." />}
+      <div style={S.row}><input placeholder="New checklist item" value={item} onChange={e=>setItem(e.target.value)} onKeyDown={e=>{ if(e.key === "Enter") addDraftItem(); }} /><button style={S.secondaryBtn} onClick={addDraftItem}>Add Checklist Item</button></div>
     </div>}
-    <div style={S.cards}>{services.map(s=><div key={s.id} style={S.smallCard} onClick={()=>setForm(s)}><b>{s.name}</b><span>{s.category}</span><span>{s.default_duration_minutes} min — {money(s.base_price)} — extra pet {money(s.extra_pet_price)}</span><ul>{serviceChecklist.filter(i=>i.service_id===s.id).map(i=><li key={i.id}>{i.label}</li>)}</ul></div>)}</div>
+    <div style={S.row}><button style={S.primaryBtn} onClick={saveAll}>Save Service</button><button style={S.secondaryBtn} onClick={()=>{ setForm(blankService); setDraftItems([]); setItem(""); }}>New</button>{form.id&&<button style={S.dangerBtn} onClick={()=>onDeleteService(form)}>Delete</button>}</div>
+    <div style={S.cards}>{services.map(s=><div key={s.id} style={S.smallCard} onClick={()=>chooseService(s)}><b>{s.name}</b><span>{s.category}</span><span>{s.default_duration_minutes} min — {money(s.base_price)} — extra pet {money(s.extra_pet_price)}</span><ul>{serviceChecklist.filter(i=>i.service_id===s.id).map(i=><li key={i.id}>{i.label}</li>)}</ul></div>)}</div>
   </Panel>;
 }
 function VetClinicsAdmin({ vetClinics = [], onSaveVetClinic, onDeleteVetClinic }) {
@@ -914,14 +982,30 @@ function DeleteConfirmModal({ request, setRequest, onClose, onConfirm }) {
     <div style={S.row}><button style={S.secondaryBtn} onClick={onClose}>Cancel</button><button style={S.dangerBtn} disabled={!ok} onClick={onConfirm}>Delete</button></div>
   </div></Modal>;
 }
-function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel }) {
-  const [form, setForm] = useState({ travel_date: todayISO(), owner_id:"", visit_id:"", mileage:0, mileage_type:"Business", notes:"" });
+function splitMileageNotes(notes = "") {
+  const raw = String(notes || "");
+  const known = ["Business", "Owner visit", "Supplies", "Car wash", "Vet / emergency"];
+  const found = known.find(k => raw.startsWith(`${k}:`));
+  if (!found) return { mileage_type:"Business", notes: raw };
+  return { mileage_type: found, notes: raw.slice(found.length + 1).trim() };
+}
+function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel, onDeleteTravel }) {
+  const blankTravel = { travel_date: todayISO(), owner_id:"", visit_id:"", mileage:0, mileage_type:"Business", notes:"" };
+  const [form, setForm] = useState(blankTravel);
   const manualTravel = travel.filter(t => !t.visit_id);
   const actualTotal = manualTravel.reduce((s,t)=>s+num(t.mileage),0);
   const assignedTotal = visits.filter(v=>v.status==='Completed').reduce((s,v)=>s+num(v.mileage),0);
   const difference = actualTotal - assignedTotal;
   const todayActual = manualTravel.filter(t=>t.travel_date===todayISO()).reduce((s,t)=>s+num(t.mileage),0);
   const todayAssigned = visits.filter(v=>v.status==='Completed' && v.visit_date===todayISO()).reduce((s,v)=>s+num(v.mileage),0);
+  function editTravel(t) {
+    const parsed = splitMileageNotes(t.notes);
+    setForm({ id:t.id, travel_date:t.travel_date || todayISO(), owner_id:t.owner_id || "", visit_id:t.visit_id || "", mileage:t.mileage || 0, mileage_type:parsed.mileage_type, notes:parsed.notes });
+  }
+  function saveTravel() {
+    onSaveTravel({ id:form.id, travel_date: form.travel_date, visit_id:null, owner_id: form.owner_id || null, mileage: num(form.mileage), notes: [form.mileage_type, form.notes].filter(Boolean).join(": ") });
+    setForm(blankTravel);
+  }
   return <Panel title="Travel / Mileage">
     <div style={S.grid3}>
       <Metric title="Actual mileage" value={`${actualTotal} km`} sub="daily travel entries" />
@@ -933,17 +1017,18 @@ function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel }) {
       <Metric title="Today assigned" value={`${todayAssigned} km`} sub="completed visits" />
       <Metric title="Today difference" value={`${todayActual - todayAssigned} km`} sub="daily comparison" />
     </div>
-    <h3>Add daily actual mileage</h3>
+    <h3>{form.id ? "Edit mileage entry" : "Add daily actual mileage"}</h3>
     <div style={S.formGrid}><Field label="Date"><input type="date" value={form.travel_date} onChange={e=>setForm({...form,travel_date:e.target.value})}/></Field><Field label="Mileage type"><select value={form.mileage_type} onChange={e=>setForm({...form,mileage_type:e.target.value})}><option>Business</option><option>Owner visit</option><option>Supplies</option><option>Car wash</option><option>Vet / emergency</option></select></Field><Field label="Owner / optional"><select value={form.owner_id} onChange={e=>setForm({...form,owner_id:e.target.value})}><option value="">None / general business</option>{Object.values(ownerMap).map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field><Field label="Actual mileage"><input type="number" value={form.mileage} onChange={e=>setForm({...form,mileage:e.target.value})}/></Field></div>
-    <Field label="Notes"><textarea placeholder="Examples: supplies run, car wash, meeting, owner visit, emergency trip" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveTravel({ travel_date: form.travel_date, visit_id:null, owner_id: form.owner_id || null, mileage: num(form.mileage), notes: [form.mileage_type, form.notes].filter(Boolean).join(": ") })}>Save Daily Mileage Entry</button>
-    <h3>Recent daily travel</h3>{manualTravel.map(t=><div key={t.id} style={S.reportRow}><b>{niceDate(t.travel_date)}</b><span>{ownerMap[t.owner_id]?.name || "Manual"}</span><span>{t.mileage} km</span><small>{t.notes}</small></div>)}
+    <Field label="Notes"><textarea placeholder="Examples: supplies run, car wash, meeting, owner visit, emergency trip" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></Field>
+    <div style={S.row}><button style={S.primaryBtn} onClick={saveTravel}>{form.id ? "Update Mileage Entry" : "Save Daily Mileage Entry"}</button>{form.id && <button style={S.secondaryBtn} onClick={()=>setForm(blankTravel)}>Cancel Edit</button>}</div>
+    <h3>Recent daily travel</h3>{manualTravel.length ? manualTravel.map(t=><div key={t.id} style={S.reportRow}><b>{niceDate(t.travel_date)}</b><span>{ownerMap[t.owner_id]?.name || "Manual"}</span><span>{t.mileage} km</span><small>{t.notes}</small><div style={S.row}><button style={S.secondaryMini} onClick={()=>editTravel(t)}>Edit</button><button style={S.dangerMini} onClick={()=>onDeleteTravel?.(t)}>Delete</button></div></div>) : <Empty text="No mileage entries yet." />}
     <h3>Assigned visit mileage</h3>{visits.filter(v=>v.status==='Completed' && num(v.mileage)>0).slice(0,50).map(v=><div key={v.id} style={S.reportRow}><b>{niceDate(v.visit_date)}</b><span>{ownerMap[v.owner_id]?.name || "Unknown"}</span><span>{v.mileage} km</span><small>{serviceMap[v.service_id]?.name || "Visit"}</small></div>)}
   </Panel>;
 }
 function SettingsAdmin({ settings, onSaveSettings }) {
   const [form, setForm] = useState(settings || { business_name:"Pet Care", business_phone:"", business_email:"", default_email:"", tax_number:"", business_notes:"", charge_gst:false, gst_rate:5 });
   useEffect(()=>setForm(settings || form), [settings?.id]);
-  return <Panel title="Business Settings"><div style={S.formGrid}><Field label="Business name"><input value={form.business_name||""} onChange={e=>setForm({...form,business_name:e.target.value})}/></Field><Field label="Phone"><input value={form.business_phone||""} onChange={e=>setForm({...form,business_phone:e.target.value})}/></Field><Field label="Email"><input value={form.business_email||""} onChange={e=>setForm({...form,business_email:e.target.value})}/></Field><Field label="Default report email"><input value={form.default_email||""} onChange={e=>setForm({...form,default_email:e.target.value})}/></Field><Field label="Tax number"><input value={form.tax_number||""} onChange={e=>setForm({...form,tax_number:e.target.value})}/></Field><Field label="GST rate"><input type="number" value={form.gst_rate||0} onChange={e=>setForm({...form,gst_rate:e.target.value})}/></Field></div><label style={S.check}><input type="checkbox" checked={!!form.charge_gst} onChange={e=>setForm({...form,charge_gst:e.target.checked})}/> Charge GST</label><Field label="Business notes"><textarea value={form.business_notes||""} onChange={e=>setForm({...form,business_notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveSettings(form)}>Save Settings</button></Panel>;
+  return <Panel title="Business Settings"><div style={S.formGrid}><Field label="Business name"><input value={form.business_name||""} onChange={e=>setForm({...form,business_name:e.target.value})}/></Field><Field label="Phone"><input value={form.business_phone||""} onChange={e=>setForm({...form,business_phone:e.target.value})}/></Field><Field label="Email"><input value={form.business_email||""} onChange={e=>setForm({...form,business_email:e.target.value})}/></Field><Field label="Default report email"><input value={form.default_email||""} onChange={e=>setForm({...form,default_email:e.target.value})}/></Field><Field label="Tax number"><input value={form.tax_number||""} onChange={e=>setForm({...form,tax_number:e.target.value})}/></Field><Field label="GST rate"><input type="number" value={form.gst_rate||0} onChange={e=>setForm({...form,gst_rate:e.target.value})}/></Field></div><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.charge_gst} onChange={e=>setForm({...form,charge_gst:e.target.checked})}/> <span>Charge GST</span></label><Field label="Business notes"><textarea value={form.business_notes||""} onChange={e=>setForm({...form,business_notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveSettings(form)}>Save Settings</button></Panel>;
 }
 function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
   return <Panel title="Deleted Items"><p style={S.muted}>Deleted items are logged here for reference. Restore can be added after the new data model is fully stable.</p>{deleted.map(d=><div key={d.id} style={S.reportRow}><b>{d.item_type}</b><span>{d.item_label}</span><span>{new Date(d.deleted_at).toLocaleString()}</span><button style={S.dangerMini} onClick={()=>onHardDeleteDeleted(d.id)}>Remove log</button></div>)}</Panel>;
@@ -951,6 +1036,7 @@ function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
 function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit, onReschedule }) {
   const safePets = (pets || []).filter(Boolean);
   const canPetInfo = typeof onPetInfo === "function";
+  const hasActions = !!(onCancel || onDeleteVisit || onReschedule);
   return <div style={S.visitCard}>
     <div>
       <b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b>
@@ -962,37 +1048,47 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
       </div>
       <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
     </div>
-    <div style={S.cardActions}>
-      {visit.status === "Scheduled" && onStart && <button style={S.secondaryMini} onClick={() => onStart(visit.id)}>Optional Start</button>}
+    <div style={S.cardActionsCompact}>
+      {visit.status === "Scheduled" && onStart && <button style={S.secondaryMini} onClick={() => onStart(visit.id)}>Start</button>}
       {["Scheduled","In Progress"].includes(visit.status) && onComplete && <button style={S.primaryMini} onClick={() => onComplete(visit.id)}>Complete</button>}
       {visit.status === "Completed" && !visit.is_paid && onMarkPaid && <button style={S.primaryMini} onClick={() => onMarkPaid(visit.id)}>Mark Paid</button>}
       {visit.status === "Completed" && visit.is_paid && onMarkUnpaid && <button style={S.secondaryMini} onClick={() => onMarkUnpaid(visit.id)}>Mark Unpaid</button>}
+      {hasActions && <details style={S.actionsMenu}>
+        <summary style={S.actionsSummary}>Actions</summary>
+        <div style={S.actionsBody}>
+          {visit.status !== "Completed" && onReschedule && <button style={S.secondaryMini} onClick={() => onReschedule(visit)}>Reschedule</button>}
+          {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => onCancel(visit.id)}>Cancel</button>}
+          {onDeleteVisit && <button style={S.dangerMini} onClick={() => onDeleteVisit(visit)}>Delete</button>}
+        </div>
+      </details>}
     </div>
-    {(onCancel || onDeleteVisit || onReschedule) && <details style={S.moreActions}><summary style={S.moreSummary}>More</summary><div style={S.moreActionBody}>
-      {visit.status !== "Completed" && onReschedule && <button style={S.secondaryMini} onClick={() => onReschedule(visit)}>Reschedule</button>}
-      {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => onCancel(visit.id)}>Cancel Visit</button>}
-      {onDeleteVisit && visit.status !== "Completed" && <button style={S.dangerMini} onClick={() => onDeleteVisit(visit)}>Delete Visit</button>}
-    </div></details>}
   </div>;
 }
 function CompleteModal({ visit, checklist, owner, pets, service, onToggleChecklist, onClose, onSave }) {
-  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "", feeding_completed: !!visit.feeding_completed, water_refreshed: !!visit.water_refreshed, medication_given: !!visit.medication_given, door_locked: !!visit.door_locked, owner_update_sent: !!visit.owner_update_sent });
-  const quickChecks = ["feeding_completed","water_refreshed","medication_given","door_locked","owner_update_sent","is_paid"];
+  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "" });
+  const visibleChecklist = [];
+  const seenChecklist = new Set();
+  (checklist || []).forEach(i => {
+    const label = String(i.label || "").trim();
+    const key = label.toLowerCase();
+    if (!label || key === "is paid" || seenChecklist.has(key)) return;
+    seenChecklist.add(key);
+    visibleChecklist.push(i);
+  });
   return <Modal onClose={onClose} title="Complete Visit"><div style={S.stack}>
     <b>{service?.name}</b>
     <span>{owner?.name} — {pets.map(p=>p.name).join(", ")}</span>
     <p style={S.muted}>Service-rate based. Complete the visit without starting a timer.</p>
     <Panel title="Checklist">
-      <div style={S.compactChecklist}>{checklist.length ? checklist.map(i=><label key={i.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!i.is_done} onChange={()=>onToggleChecklist(i)} /> <span>{i.label}</span></label>) : <Empty text="No checklist items for this visit." />}</div>
+      <div style={S.compactChecklist}>{visibleChecklist.length ? visibleChecklist.map(i=><label key={i.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!i.is_done} onChange={()=>onToggleChecklist(i)} /> <span>{i.label}</span></label>) : <Empty text="No checklist items for this visit." />}</div>
     </Panel>
-    <div style={S.compactChecklist}>{quickChecks.map(k=><label key={k} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form[k]} onChange={e=>setForm({...form,[k]:e.target.checked})}/> <span>{k.replaceAll("_"," ")}</span></label>)}</div>
+    <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.is_paid} onChange={e=>setForm({...form,is_paid:e.target.checked})}/> <span>Mark as paid</span></label>
     {form.is_paid && <><Field label="Payment method"><select value={form.payment_method || ""} onChange={e=>setForm({...form,payment_method:e.target.value})}><option value="">Select method</option><option>Cash</option><option>E-transfer</option><option>Cheque</option><option>Card</option><option>Other</option></select></Field><Field label="Payment notes"><textarea value={form.payment_notes || ""} onChange={e=>setForm({...form,payment_notes:e.target.value})}/></Field></>}
     <Field label="Completion notes"><textarea value={form.completion_notes} onChange={e=>setForm({...form,completion_notes:e.target.value})}/></Field>
     <Field label="Incident / issue notes"><textarea value={form.incident_notes} onChange={e=>setForm({...form,incident_notes:e.target.value})}/></Field>
     <button style={S.primaryBtn} onClick={()=>onSave(visit.id, form)}>Mark Completed</button>
   </div></Modal>;
 }
-
 
 function cleanPhoneHref(phone) {
   const raw = String(phone || "").trim();
@@ -1167,7 +1263,7 @@ function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onM
     <Panel title="Unpaid Completed Visits">
       {unpaid.length ? <div style={S.stack}>
         <div style={S.row}><button style={S.primaryBtn} onClick={()=>onMarkManyPaid(selected)}>Mark Selected Paid</button><button style={S.secondaryBtn} onClick={()=>setSelected(unpaid.map(v=>v.id))}>Select All</button><button style={S.secondaryBtn} onClick={()=>setSelected([])}>Clear</button></div>
-        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.check}><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> Select</label><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(v.total_amount)}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
+        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> <span>Select</span></label><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(v.total_amount)}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
       </div> : <Empty text="No unpaid completed visits for this owner." />}
     </Panel>
     <Panel title="Paid Visits">
@@ -1239,7 +1335,7 @@ function PetForm({ value, onChange, vetClinics = [], onSaveVetClinic }) {
     </div><button style={S.secondaryBtn} onClick={()=>{ if(newVet.clinic_name.trim()){ onSaveVetClinic(newVet); setNewVet({ clinic_name:"", phone:"", emergency_phone:"", address:"", notes:"" }); }}}>Save Vet Clinic</button></details>
   </div>;
 }
-function ServiceForm({ value, onChange }) { return <div style={S.formGrid}>{["name","category","default_duration_minutes","base_price","extra_pet_price"].map(k=><Field key={k} label={k.replaceAll("_"," ")}><input type={["default_duration_minutes","base_price","extra_pet_price"].includes(k)?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}<label style={S.check}><input type="checkbox" checked={!!value.taxable} onChange={e=>onChange({...value,taxable:e.target.checked})}/> Taxable</label><Field label="Description"><textarea value={value.description||""} onChange={e=>onChange({...value,description:e.target.value})}/></Field></div>; }
+function ServiceForm({ value, onChange }) { return <div style={S.formGrid}>{["name","category","default_duration_minutes","base_price","extra_pet_price"].map(k=><Field key={k} label={k.replaceAll("_"," ")}><input type={["default_duration_minutes","base_price","extra_pet_price"].includes(k)?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}<label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!value.taxable} onChange={e=>onChange({...value,taxable:e.target.checked})}/> <span>Taxable</span></label><Field label="Description"><textarea value={value.description||""} onChange={e=>onChange({...value,description:e.target.value})}/></Field></div>; }
 function OptionForm({ value, onChange, services, pets=[] }) { return <div style={S.formGrid}>
   <Field label="Option name"><input value={value.option_name||""} onChange={e=>onChange({...value,option_name:e.target.value})}/></Field>
   {pets.length > 0 && <Field label="Pet"><select value={value.pet_id||""} onChange={e=>onChange({...value,pet_id:e.target.value})}><option value="">Select pet</option>{pets.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}
@@ -1283,6 +1379,8 @@ const S = {
   main:{maxWidth:430,margin:"0 auto",padding:"8px 10px 36px",overflowX:"hidden"},
   stack:{display:"grid",gap:14},
   grid3:{display:"grid",gridTemplateColumns:"1fr",gap:12},
+  compactHeaderStats:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",justifyContent:"flex-start",padding:"10px 12px",border:"1px solid rgba(191,219,254,.95)",borderRadius:18,background:"rgba(255,255,255,.88)",boxShadow:"0 10px 24px rgba(8,21,58,.06)",fontWeight:800,color:"#334155"},
+  compactHeaderStatsSpan:{display:"inline-flex"},
   twoCol:{display:"grid",gridTemplateColumns:"1fr",gap:12},
   twoColBalanced:{display:"grid",gridTemplateColumns:"1fr",gap:12},
   card:{background:"rgba(255,255,255,.96)",border:"1px solid rgba(191,219,254,.85)",borderRadius:26,padding:16,boxShadow:"0 18px 48px rgba(8,21,58,.08)",textAlign:"left",overflow:"hidden"},
@@ -1302,13 +1400,17 @@ const S = {
   primaryMini:{border:0,background:"linear-gradient(135deg,#0f62fe,#2dd4bf)",color:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900,boxShadow:"0 9px 16px rgba(15,98,254,.18)"},
   secondaryMini:{border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900},
   dangerMini:{border:0,background:"#ffe4e6",color:"#be123c",borderRadius:14,padding:"9px 11px",fontWeight:900},
+  cardActionsCompact:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:8},
+  actionsMenu:{position:"relative",display:"inline-block"},
+  actionsSummary:{listStyle:"none",cursor:"pointer",border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900,fontSize:14},
+  actionsBody:{position:"absolute",right:0,top:"calc(100% + 6px)",zIndex:30,display:"grid",gap:6,minWidth:140,padding:8,border:"1px solid #dbeafe",borderRadius:14,background:"#fff",boxShadow:"0 16px 34px rgba(8,21,58,.18)"},
   formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:12},
   formGridPadded:{display:"grid",gridTemplateColumns:"1fr",gap:12,padding:"0 14px 14px"},
   field:{display:"grid",gap:6,fontWeight:900,color:"#4b3529"},
   check:{display:"flex",gap:8,alignItems:"center",fontWeight:800},
-  compactChecklist:{display:"grid",gap:9},
-  checkCompact:{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:10,alignItems:"center",fontWeight:850,textAlign:"left"},
-  checkboxSmall:{width:18,height:18,minHeight:18,margin:0,padding:0},
+  compactChecklist:{display:"grid",gap:8},
+  checkCompact:{display:"grid",gridTemplateColumns:"18px minmax(0,1fr)",gap:9,alignItems:"center",fontWeight:850,textAlign:"left"},
+  checkboxSmall:{width:16,height:16,minHeight:16,margin:0,padding:0,accentColor:"#0f62fe"},
   row:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"},
   splitRow:{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"},
   list:{display:"grid",gap:9,maxHeight:260,overflow:"auto"},
