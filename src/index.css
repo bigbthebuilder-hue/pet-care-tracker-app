@@ -1,12 +1,12 @@
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
+  --text: #544236;
+  --text-h: #211816;
+  --bg: #ffffff;
   --border: #e5e4e7;
   --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
+  --accent: #d9783f;
+  --accent-bg: rgba(217, 120, 63, 0.10);
+  --accent-border: rgba(217, 120, 63, 0.42);
   --social-bg: rgba(244, 243, 236, 0.5);
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
@@ -240,4 +240,74 @@ summary::after {
 }
 details[open] summary::after {
   content: ' –';
+}
+
+
+/* Pet Care visual cleanup v1 */
+body {
+  background:
+    radial-gradient(circle at top left, rgba(217, 120, 63, 0.045), transparent 34rem),
+    radial-gradient(circle at top right, rgba(63, 143, 95, 0.035), transparent 32rem),
+    #ffffff;
+}
+
+button {
+  cursor: pointer;
+  will-change: transform, box-shadow;
+}
+
+button:hover:not(:disabled),
+a:hover {
+  transform: translateY(-1px);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(217, 120, 63, 0.28);
+  outline-offset: 2px;
+}
+
+input,
+select,
+textarea {
+  border-color: #ded3ca;
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #d9783f;
+  box-shadow: 0 0 0 4px rgba(217, 120, 63, 0.10);
+}
+
+.page-transition {
+  animation: tabSlideFadeIn 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+@keyframes tabSlideFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+    filter: blur(1px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+button[style*="border-radius: 999px"]:hover:not(:disabled),
+button[style*="border-radius:999"]:hover:not(:disabled) {
+  box-shadow: 0 8px 18px rgba(70, 50, 35, 0.10);
+}
+
+button[style*="background: rgb(217, 120, 63)"]:hover:not(:disabled),
+button[style*="#d9783f"]:hover:not(:disabled) {
+  box-shadow: 0 12px 24px rgba(217, 120, 63, 0.24);
 }
