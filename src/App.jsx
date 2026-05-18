@@ -1,10 +1,31 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 
-const VERSION = "PET_CARE_V15_PHONE_FIRST_VISUAL_REBUILD";
+const VERSION = "PET_CARE_V18_DOCUMENTS_INTAKE";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
+
+const DOCUMENT_TEMPLATES = [
+  { id: "client_household_intake", title: "Client / Household Intake", fileName: "01_Client_Household_Intake_Form.docx", group: "Core intake" },
+  { id: "individual_pet_profile", title: "Individual Pet Profile", fileName: "02_Individual_Pet_Profile_Form.docx", group: "Core intake", petSpecific: true },
+  { id: "service_agreement", title: "Pet Care Service Agreement", fileName: "03_Pet_Care_Service_Agreement.docx", group: "Core intake" },
+  { id: "vet_authorization", title: "Emergency Veterinary Authorization", fileName: "04_Emergency_Veterinary_Authorization.docx", group: "Core intake", petSpecific: true },
+  { id: "home_access", title: "Home Access / Key Security Release", fileName: "05_Home_Access_Key_Security_Release.docx", group: "Core intake" },
+  { id: "policies_pricing", title: "Client Policies / Pricing Acknowledgement", fileName: "09_Client_Policies_Pricing_Acknowledgement.docx", group: "Core intake" },
+  { id: "medication_auth", title: "Medication Administration Authorization", fileName: "06_Medication_Administration_Authorization.docx", group: "Optional forms", petSpecific: true },
+  { id: "dog_walking", title: "Dog Walking Consent / Rules", fileName: "12_Dog_Walking_Consent_Rules.docx", group: "Optional forms", petSpecific: true },
+  { id: "overnight", title: "Overnight / In-Home Sitting Add-On", fileName: "13_Overnight_In_Home_Sitting_Add_On.docx", group: "Optional forms" },
+  { id: "photo_consent", title: "Photo / Marketing Consent", fileName: "14_Photo_Marketing_Consent.docx", group: "Optional forms" },
+  { id: "medication_log", title: "Medication Administration Log", fileName: "07_Medication_Administration_Log.docx", group: "Operational forms", petSpecific: true },
+  { id: "visit_notes", title: "Visit Checklist / Completion Notes", fileName: "08_Visit_Checklist_Completion_Notes.docx", group: "Operational forms" },
+  { id: "meet_greet", title: "Meet & Greet Safety Checklist", fileName: "11_Meet_Greet_Safety_Checklist.docx", group: "Operational forms" },
+  { id: "incident_report", title: "Incident Report", fileName: "15_Incident_Report_Form.docx", group: "Operational forms", petSpecific: true },
+  { id: "incident_follow_up", title: "Incident Follow-Up Checklist", fileName: "16_Incident_Follow_Up_Checklist.docx", group: "Operational forms", petSpecific: true },
+];
+const CORE_DOCUMENT_IDS = ["client_household_intake", "individual_pet_profile", "service_agreement", "vet_authorization", "home_access", "policies_pricing"];
+const DOCUMENT_TYPES = DOCUMENT_TEMPLATES.map(d => d.title).concat(["Signed full intake package", "Other"]);
+
 
 const blankOwner = {
   name: "", address: "", phone: "", email: "", invoice_email: "",
@@ -107,6 +128,7 @@ export default function App() {
   const [vetClinics, setVetClinics] = useState([]);
   const [settings, setSettings] = useState(null);
   const [deleted, setDeleted] = useState([]);
+  const [ownerDocuments, setOwnerDocuments] = useState([]);
 
   const [selectedOwnerId, setSelectedOwnerId] = useState("");
   const [selectedPetId, setSelectedPetId] = useState("");
@@ -160,6 +182,8 @@ export default function App() {
       setServiceChecklist(calls[3].data || []); setPetChecklist(calls[4].data || []); setOptions(calls[5].data || []);
       setVisits(calls[6].data || []); setVisitPets(calls[7].data || []); setVisitChecklist(calls[8].data || []);
       setTravel(calls[9].data || []); setVetClinics(calls[10].data || []); setSettings((calls[11].data || [])[0] || null); setDeleted(calls[12].data || []);
+      const docsRes = await supabase.from("pet_client_documents").select("*").order("uploaded_at", { ascending: false });
+      if (!docsRes.error) setOwnerDocuments(docsRes.data || []); else setOwnerDocuments([]);
       if (!selectedOwnerId && calls[0].data?.[0]) setSelectedOwnerId(calls[0].data[0].id);
     } catch (e) { setError(tableError(e)); }
     setLoading(false);
@@ -177,6 +201,24 @@ export default function App() {
     } catch (e) { setError(tableError(e)); }
     setSaving(false);
   }
+  async function uploadOwnerDocument({ ownerId, petId = "", documentType, file, notes = "" }) {
+    if (!ownerId || !file) { setError("Choose an owner and file first."); return; }
+    setSaving(true); setError("");
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "_");
+      const path = `${ownerId}/${Date.now()}_${safeName}`;
+      const { error: uploadError } = await supabase.storage.from("pet-documents").upload(path, file, { upsert: false, contentType: file.type || undefined });
+      if (uploadError) throw uploadError;
+      const publicUrl = supabase.storage.from("pet-documents").getPublicUrl(path)?.data?.publicUrl || "";
+      const row = { owner_id: ownerId, pet_id: petId || null, document_type: documentType || "Other", file_name: file.name, file_path: path, file_url: publicUrl, notes, status: "received", uploaded_at: nowIso() };
+      const { error: insertError } = await supabase.from("pet_client_documents").insert(row);
+      if (insertError) throw insertError;
+      setToast("Document attached");
+      await loadAll();
+    } catch (e) { setError(tableError(e)); }
+    setSaving(false);
+  }
+
 
   async function saveServiceWithChecklist(service, draftItems = []) {
     setSaving(true); setError("");
@@ -394,7 +436,7 @@ export default function App() {
     {loading ? <div style={S.card}>Loading pet care data...</div> : <main key={`${tab}-${officeTab}`} style={S.main} className="page-transition">
       {tab === "Today" && <TodayPage visits={todayVisits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Schedule" && <SchedulePage owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
-      {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
+      {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} ownerDocuments={ownerDocuments} onUploadDocument={uploadOwnerDocument} onDeleteDocument={(d)=>requestDelete("pet_client_documents", d, "client_document", d.file_name || d.document_type)} settings={settings} />}
       {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onSaveServiceWithChecklist={saveServiceWithChecklist} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onDeleteTravel={(t)=>requestDelete("pet_travel", t, "travel", `${niceDate(t.travel_date)} ${t.mileage || 0} km`)} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
     </main>}
 
@@ -509,8 +551,8 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
 
   </section>;
 }
-function OwnersPage({ owners, pets, services, options, petChecklist, visits, visitPets, selectedOwnerId, selectedPetId, setSelectedOwnerId, setSelectedPetId, ownerMap, petMap, serviceMap, onSaveOwner, onSavePet, onSaveOption, onAddPetChecklist, onDeleteOwner, onDeletePet, onDeleteOption, vetClinics, onSaveVetClinic, onPetInfo, onMarkPaid, onMarkUnpaid, onMarkManyPaid, onDeleteVisit }) {
-  const OWNER_TABS = ["Owner Info", "Pets", "Saved Services", "Visits", "Billing"];
+function OwnersPage({ owners, pets, services, options, petChecklist, visits, visitPets, selectedOwnerId, selectedPetId, setSelectedOwnerId, setSelectedPetId, ownerMap, petMap, serviceMap, onSaveOwner, onSavePet, onSaveOption, onAddPetChecklist, onDeleteOwner, onDeletePet, onDeleteOption, vetClinics, onSaveVetClinic, onPetInfo, onMarkPaid, onMarkUnpaid, onMarkManyPaid, onDeleteVisit, ownerDocuments = [], onUploadDocument, onDeleteDocument, settings }) {
+  const OWNER_TABS = ["Owner Info", "Pets", "Documents", "Saved Services", "Visits", "Billing"];
   const PET_TABS = ["Profile", "Care", "Emergency", "Checklist", "History"];
   const [ownerTab, setOwnerTab] = useState("Owner Info");
   const [petTab, setPetTab] = useState("Profile");
@@ -582,6 +624,8 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
             {selectedPet?.id && <div style={S.dangerZone}><b>Danger zone</b><small>Deleting a pet requires typing the exact pet name.</small><button style={S.dangerMini} onClick={()=>onDeletePet(selectedPet)}>Delete Pet</button></div>}
           </div>}
         </div>}
+
+        {ownerTab === "Documents" && <OwnerDocumentsPanel owner={selectedOwner} pets={ownerPets} ownerDocuments={ownerDocuments.filter(d=>d.owner_id===selectedOwnerId)} onUploadDocument={onUploadDocument} onDeleteDocument={onDeleteDocument} settings={settings} />}
 
         {ownerTab === "Saved Services" && <div style={S.stack}>
           <div style={S.row}><button style={S.primaryBtn} onClick={()=>newOption()}>Add Saved Service Option</button><span style={S.muted}>Saved options are quick templates. They do not auto-schedule visits.</span></div>
@@ -1214,6 +1258,77 @@ function PetReadOnly({ pet, petTab, visits, serviceMap, visitPets, petMap, petCh
   return <div style={S.stack}>{visits.length ? visits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} />) : <Empty text="No visit history for this pet yet." />}</div>;
 }
 function VisitHistoryRow({ visit, service, pets, onDeleteVisit }) { return <div style={S.visitHistory}><div><b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b><div style={S.muted}>{service?.name || "Service"} · {pets.map(p=>p.name).join(", ")}</div></div><div style={S.status}>{visit.status}</div><div><b>{money(visit.total_amount)}</b></div>{onDeleteVisit && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>; }
+function formFileUrl(fileName) {
+  return `${window.location.origin}/forms/${encodeURIComponent(fileName)}`;
+}
+function selectedDocsFromIds(ids) {
+  return DOCUMENT_TEMPLATES.filter(d => ids.includes(d.id));
+}
+function buildDocumentEmailText(owner, pets, docs, settings) {
+  const business = settings?.business_name || "Pet Care by Kiri";
+  const lines = [];
+  lines.push(`Hi ${owner?.name || "there"},`);
+  lines.push("");
+  lines.push(`Attached/linked below are the pet care forms for ${business}.`);
+  lines.push("Please review, complete, sign where needed, and email the finished copies back before the first visit.");
+  lines.push("");
+  if (pets?.length) lines.push(`Pets on file: ${pets.map(p => p.name).join(", ")}`);
+  lines.push("");
+  lines.push("Selected forms:");
+  docs.forEach((d, idx) => lines.push(`${idx + 1}. ${d.title}: ${formFileUrl(d.fileName)}`));
+  lines.push("");
+  lines.push("Full package PDF:");
+  lines.push(formFileUrl("Pet_Care_Business_Forms_Combined_v3.pdf"));
+  lines.push("");
+  lines.push("Thank you,");
+  lines.push(business);
+  if (settings?.business_phone) lines.push(settings.business_phone);
+  if (settings?.business_email) lines.push(settings.business_email);
+  return lines.join("\n");
+}
+function documentPackageHtml(owner, pets, docs, settings) {
+  const ownerBlock = `<div class="box"><b>Client / Owner</b><br>${escapeHtml(owner?.name || "")}<br>${escapeHtml(owner?.phone || "")}<br>${escapeHtml(owner?.email || "")}<br>${escapeHtml(owner?.address || "")}</div>`;
+  const petBlock = `<div class="box"><b>Pets</b><br>${pets?.length ? pets.map(p => `${escapeHtml(p.name || "Pet")} — ${escapeHtml([p.species, p.breed, p.age_text].filter(Boolean).join(" · "))}`).join("<br>") : "No pets selected yet."}</div>`;
+  const forms = docs.map(d => `<section style="break-inside:avoid;page-break-inside:avoid;margin-top:18px;border-top:1px solid #ddd;padding-top:14px"><h2>${escapeHtml(d.title)}</h2><p class="muted">Original file: ${escapeHtml(d.fileName)}</p>${prefillFormBody(d, owner, pets)}<div style="margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:18px"><div>Client signature: ______________________________</div><div>Date: __________________</div></div></section>`).join("");
+  return `<div class="doc-head"><div><h1>${escapeHtml(settings?.business_name || "Pet Care by Kiri")}</h1><div>${escapeHtml(settings?.business_phone || "")}</div><div>${escapeHtml(settings?.business_email || "")}</div></div><div style="text-align:right"><h2>INTAKE DOCUMENTS</h2><div>${escapeHtml(owner?.name || "Selected owner")}</div><div>${new Date().toLocaleDateString()}</div></div></div><div class="bill-to">${ownerBlock}${petBlock}</div>${forms}<div class="footer">Please complete, sign, and return these documents before service begins.</div>`;
+}
+function prefillFormBody(doc, owner, pets) {
+  const petRows = (pets || []).map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.species)}</td><td>${escapeHtml(p.breed)}</td><td>${escapeHtml(p.age_text)}</td><td>${escapeHtml(p.medical_conditions || p.allergies || "")}</td></tr>`).join("");
+  if (doc.id === "client_household_intake") return `<table><tbody><tr><td>Owner name</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Phone</td><td>${escapeHtml(owner?.phone || "")}</td></tr><tr><td>Email</td><td>${escapeHtml(owner?.email || "")}</td></tr><tr><td>Address</td><td>${escapeHtml(owner?.address || "")}</td></tr><tr><td>Emergency contact</td><td>${escapeHtml([owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — "))}</td></tr><tr><td>Access instructions</td><td>${escapeHtml(owner?.access_instructions || "")}</td></tr></tbody></table>`;
+  if (doc.petSpecific || doc.id === "individual_pet_profile") return `<table><thead><tr><th>Pet</th><th>Species</th><th>Breed</th><th>Age</th><th>Medical / allergy notes</th></tr></thead><tbody>${petRows || `<tr><td colspan="5">Add pet details here.</td></tr>`}</tbody></table><p><b>Care / feeding / medication instructions:</b></p><p style="min-height:50px;border:1px solid #ddd;border-radius:8px;padding:10px">${escapeHtml((pets || []).map(p => `${p.name}: ${[p.feeding_instructions, p.medication_instructions, p.care_notes].filter(Boolean).join(" | ")}`).filter(Boolean).join("\n"))}</p>`;
+  return `<p>This form is part of the ${escapeHtml(doc.group)} package for ${escapeHtml(owner?.name || "the client")}.</p><p style="min-height:80px;border:1px solid #ddd;border-radius:8px;padding:10px">Notes / terms / client initials:</p>`;
+}
+function OwnerDocumentsPanel({ owner, pets, ownerDocuments, onUploadDocument, onDeleteDocument, settings }) {
+  const [selectedIds, setSelectedIds] = useState(CORE_DOCUMENT_IDS);
+  const [uploadType, setUploadType] = useState("Signed full intake package");
+  const [uploadPetId, setUploadPetId] = useState("");
+  const [uploadNotes, setUploadNotes] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
+  const docs = selectedDocsFromIds(selectedIds);
+  function toggleDoc(id) { setSelectedIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); }
+  const grouped = DOCUMENT_TEMPLATES.reduce((acc,d)=>{ (acc[d.group] ||= []).push(d); return acc; }, {});
+  return <div style={S.stack}>
+    <Panel title="Send Forms">
+      <div style={S.row}><button style={S.primaryBtn} onClick={()=>setSelectedIds(CORE_DOCUMENT_IDS)}>Core Intake Package</button><button style={S.secondaryBtn} onClick={()=>setSelectedIds(DOCUMENT_TEMPLATES.map(d=>d.id))}>Select All</button><button style={S.secondaryBtn} onClick={()=>setSelectedIds([])}>Clear</button></div>
+      {Object.entries(grouped).map(([group, list]) => <div key={group} style={S.detailBox}><b>{group}</b>{list.map(d => <label key={d.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={selectedIds.includes(d.id)} onChange={()=>toggleDoc(d.id)} /><span>{d.title}</span></label>)}</div>)}
+      <div style={S.row}><button style={S.primaryBtn} disabled={!docs.length} onClick={()=>printHtmlDocument(`${owner?.name || "Owner"} Intake Forms`, documentPackageHtml(owner, pets, docs, settings))}>Print Selected Forms</button><button style={S.secondaryBtn} disabled={!docs.length} onClick={()=>emailTextDocument(`${settings?.business_name || "Pet Care by Kiri"} Intake Forms`, buildDocumentEmailText(owner, pets, docs, settings), owner?.email)}>Email Selected Forms</button></div>
+      <div style={S.detailBox}><b>Download original files</b><a style={S.phoneLink} href="/forms/Pet_Care_Business_Forms_Combined_v3.pdf" target="_blank" rel="noreferrer">Open full combined PDF</a><a style={S.phoneLink} href="/forms/Pet_Care_Business_Forms_Combined.docx" target="_blank" rel="noreferrer">Open editable combined DOCX</a></div>
+    </Panel>
+    <Panel title="Upload Signed / Returned Document">
+      <div style={S.formGrid}>
+        <Field label="Document type"><select value={uploadType} onChange={e=>setUploadType(e.target.value)}>{DOCUMENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></Field>
+        <Field label="Applies to pet (optional)"><select value={uploadPetId} onChange={e=>setUploadPetId(e.target.value)}><option value="">Owner / household</option>{pets.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+        <Field label="Signed file"><input type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.heic,image/*,application/pdf" onChange={e=>setUploadFile(e.target.files?.[0] || null)} /></Field>
+        <Field label="Notes"><textarea value={uploadNotes} onChange={e=>setUploadNotes(e.target.value)} /></Field>
+      </div>
+      <button style={S.primaryBtn} disabled={!uploadFile} onClick={async()=>{ await onUploadDocument?.({ ownerId: owner?.id, petId: uploadPetId, documentType: uploadType, file: uploadFile, notes: uploadNotes }); setUploadFile(null); setUploadNotes(""); }}>Attach Document to Owner</button>
+    </Panel>
+    <Panel title="Attached Documents">
+      {ownerDocuments.length ? ownerDocuments.map(d => <div key={d.id} style={S.billingRowCompact}><div><b>{d.document_type || "Document"}</b><div style={S.muted}>{d.file_name || "File"}</div><small>{d.pet_id ? `Pet: ${pets.find(p=>p.id===d.pet_id)?.name || "Pet"} · ` : "Owner / household · "}{d.uploaded_at ? new Date(d.uploaded_at).toLocaleDateString() : ""}</small>{d.notes ? <div>{d.notes}</div> : null}</div><div style={S.row}>{d.file_url && <a style={S.secondaryMini} href={d.file_url} target="_blank" rel="noreferrer">Open</a>}<button style={S.dangerMini} onClick={()=>onDeleteDocument?.(d)}>Delete</button></div></div>) : <Empty text="No signed documents attached yet." />}
+    </Panel>
+  </div>;
+}
+
 function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onMarkPaid, onMarkUnpaid, onMarkManyPaid }) {
   const completed = visits.filter(v=>v.status==="Completed");
   const [billingFilter, setBillingFilter] = useState("unpaid");
