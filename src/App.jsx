@@ -1,10 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 
-const VERSION = "PET_CARE_V18_DOCUMENTS_INTAKE";
+const VERSION = "PET_CARE_V21_NAV_CLEANUP";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
+
+const TAB_ICONS = { Today: "home", Schedule: "calendarCheck", Owners: "paw", Office: "briefcase" };
+const OWNER_TAB_ICONS = { "Owner Info": "user", Pets: "paw", Documents: "folder", "Saved Services": "star", Visits: "calendarCheck", Billing: "receipt" };
+const PET_TAB_ICONS = { Profile: "paw", Care: "heartPulse", Emergency: "alertTriangle", Checklist: "squareCheck", History: "history" };
+const OFFICE_TAB_ICONS = { Reports: "barChart", Services: "bone", Vets: "cross", Travel: "car", Settings: "settings", Deleted: "trash" };
+const SCHEDULE_FILTERS = ["Upcoming", "Active", "Completed"];
+const DEFAULT_SERVICE_COLORS = ["#0f62fe", "#10b981", "#8b5cf6", "#f97316", "#e11d48", "#06b6d4", "#f59e0b", "#ec4899"];
 
 const DOCUMENT_TEMPLATES = [
   { id: "client_household_intake", title: "Client / Household Intake", fileName: "01_Client_Household_Intake_Form.docx", group: "Core intake" },
@@ -43,7 +50,7 @@ const blankPet = {
 };
 const blankService = {
   name: "", category: "Dog Walk", default_duration_minutes: 30, base_price: 0, extra_pet_price: 0,
-  taxable: false, description: "", is_active: true, sort_order: 0,
+  taxable: false, service_color: "#0f62fe", description: "", is_active: true, sort_order: 0,
 };
 const blankOption = {
   owner_id: "", pet_id: "", service_id: "", option_name: "", default_duration_minutes: 30,
@@ -95,6 +102,64 @@ function byName(a, b) { return (a.name || "").localeCompare(b.name || ""); }
 function visitSort(a,b) { return `${a.visit_date || ""} ${a.scheduled_start_time || ""}`.localeCompare(`${b.visit_date || ""} ${b.scheduled_start_time || ""}`); }
 function splitLines(text) { return String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean); }
 function tableError(err) { return err?.message || String(err || "Unknown error"); }
+
+function Icon({ name, size = 24, strokeWidth = 2.25, style }) {
+  const common = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth };
+  const paths = {
+    home: <><path {...common} d="M3 10.5 12 3l9 7.5"/><path {...common} d="M5 10v10h14V10"/><path {...common} d="M9.5 20v-6h5v6"/></>,
+    calendarCheck: <><rect {...common} x="4" y="5" width="16" height="15" rx="3"/><path {...common} d="M8 3v4M16 3v4M4 10h16"/><path {...common} d="m8.5 15 2.2 2.2 4.8-5"/></>,
+    paw: <><circle cx="12" cy="14" r="4.2" fill="currentColor"/><circle cx="6.7" cy="9.2" r="2.1" fill="currentColor"/><circle cx="10" cy="6.4" r="2.1" fill="currentColor"/><circle cx="14" cy="6.4" r="2.1" fill="currentColor"/><circle cx="17.3" cy="9.2" r="2.1" fill="currentColor"/></>,
+    briefcase: <><rect {...common} x="3.5" y="7" width="17" height="12.5" rx="3"/><path {...common} d="M9 7V5.5A2.5 2.5 0 0 1 11.5 3h1A2.5 2.5 0 0 1 15 5.5V7"/><path {...common} d="M3.5 12h17"/></>,
+    user: <><circle {...common} cx="12" cy="8" r="4"/><path {...common} d="M4.5 20c1.6-4.2 13.4-4.2 15 0"/></>,
+    folder: <><path {...common} d="M3.5 6.5h6l2 2h8.5v9a2.5 2.5 0 0 1-2.5 2.5H6a2.5 2.5 0 0 1-2.5-2.5z"/><path {...common} d="M3.5 10h17"/></>,
+    star: <path {...common} d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2 7.5 14 3 9.6l6.2-.9z"/>,
+    receipt: <><path {...common} d="M6 3h12v18l-2-1.2-2 1.2-2-1.2-2 1.2-2-1.2L6 21z"/><path {...common} d="M9 8h6M9 12h6M9 16h4"/></>,
+    heartPulse: <><path {...common} d="M20.5 9.5c0 5.2-8.5 10.5-8.5 10.5S3.5 14.7 3.5 9.5A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8.5 2.5Z"/><path {...common} d="M7 13h2.1l1.2-2.8 2.1 5.3 1.5-3H17"/></>,
+    alertTriangle: <><path {...common} d="M12 3 22 20H2z"/><path {...common} d="M12 9v5M12 17h.01"/></>,
+    squareCheck: <><rect {...common} x="4" y="4" width="16" height="16" rx="3"/><path {...common} d="m8 12 2.5 2.5L16.5 9"/></>,
+    history: <><path {...common} d="M4 12a8 8 0 1 0 2.4-5.7"/><path {...common} d="M4 4v5h5"/><path {...common} d="M12 8v5l3 2"/></>,
+    barChart: <><path {...common} d="M4 20h16"/><rect {...common} x="6" y="11" width="3" height="7" rx="1"/><rect {...common} x="11" y="7" width="3" height="11" rx="1"/><rect {...common} x="16" y="4" width="3" height="14" rx="1"/></>,
+    bone: <path {...common} d="M8.2 8.2 15.8 15.8M6.7 11.3a3 3 0 1 1-3.9-3.9 3 3 0 1 1 3.9 3.9Zm10.6 1.4a3 3 0 1 1 3.9 3.9 3 3 0 1 1-3.9-3.9Z"/>,
+    cross: <><path {...common} d="M12 4v16M4 12h16"/><rect {...common} x="7" y="3.5" width="10" height="17" rx="3" transform="rotate(90 12 12)"/></>,
+    car: <><path {...common} d="M4 14h16l-1.7-5.1A3 3 0 0 0 15.5 7h-7a3 3 0 0 0-2.8 1.9L4 14Z"/><path {...common} d="M5 14v4h2M17 18h2v-4M8 10h8"/><circle cx="8" cy="17" r="1.7" fill="currentColor"/><circle cx="16" cy="17" r="1.7" fill="currentColor"/></>,
+    settings: <><circle {...common} cx="12" cy="12" r="3"/><path {...common} d="M19.4 15a8 8 0 0 0 .1-6l-2.1-.6-.9-2-2 .8a8 8 0 0 0-5 0l-2-.8-.9 2-2.1.6a8 8 0 0 0 .1 6l2 .6.9 2 2-.8a8 8 0 0 0 5 0l2 .8.9-2z"/></>,
+    trash: <><path {...common} d="M4 7h16M9 7V5h6v2M7 7l1 14h8l1-14"/><path {...common} d="M10 11v6M14 11v6"/></>,
+    playCircle: <><circle {...common} cx="12" cy="12" r="9"/><path fill="currentColor" d="M10 8.5v7l6-3.5z"/></>,
+    checkCircle: <><circle {...common} cx="12" cy="12" r="9"/><path {...common} d="m8 12 2.5 2.5L16.5 9"/></>,
+    moreHorizontal: <><circle cx="6" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18" cy="12" r="1.6" fill="currentColor"/></>,
+    calendarClock: <><rect {...common} x="4" y="5" width="16" height="15" rx="3"/><path {...common} d="M8 3v4M16 3v4M4 10h16"/><path {...common} d="M12 13v3l2 1"/></>,
+    pencil: <><path {...common} d="M4 20h4l11-11a2.4 2.4 0 0 0-4-4L4 16z"/><path {...common} d="m13.5 6.5 4 4"/></>,
+    fileText: <><path {...common} d="M7 3h7l4 4v14H7z"/><path {...common} d="M14 3v5h5M9.5 12h5M9.5 16h5"/></>,
+  };
+  return <svg aria-hidden="true" viewBox="0 0 24 24" width={size} height={size} style={{display:"block",...style}}>{paths[name] || paths.fileText}</svg>;
+}
+
+function hashString(str) { let h = 0; for (let i = 0; i < String(str || "").length; i++) h = ((h << 5) - h) + String(str).charCodeAt(i); return Math.abs(h); }
+function serviceColor(service) {
+  const explicit = service?.service_color || service?.color || service?.color_hex;
+  if (explicit && String(explicit).startsWith("#")) return explicit;
+  const key = `${service?.category || ""} ${service?.name || ""}`.toLowerCase();
+  if (key.includes("walk")) return "#0f62fe";
+  if (key.includes("drop") || key.includes("check")) return "#10b981";
+  if (key.includes("overnight") || key.includes("sitting")) return "#8b5cf6";
+  if (key.includes("med")) return "#e11d48";
+  if (key.includes("feed")) return "#f97316";
+  return DEFAULT_SERVICE_COLORS[hashString(key) % DEFAULT_SERVICE_COLORS.length];
+}
+function hexToRgba(hex, alpha = 1) {
+  const raw = String(hex || "#0f62fe").replace("#", "");
+  const full = raw.length === 3 ? raw.split("").map(c => c+c).join("") : raw.padEnd(6,"0").slice(0,6);
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function visitCardStyle(visit, service) {
+  const color = serviceColor(service);
+  const base = { ...S.visitCard, borderLeft: "1px solid #dbeafe", borderRight: "1px solid #dbeafe" };
+  if (visit?.status === "Completed") return { ...base, borderRight: `6px solid ${color}`, borderLeft: "1px solid #dbeafe" };
+  if (visit?.status === "Cancelled" || visit?.status === "Missed") return { ...base, borderLeft: "6px solid #94a3b8", background: "#f8fafc", opacity: .92 };
+  return { ...base, borderLeft: `6px solid ${color}` };
+}
 
 function defaultMileageForPetIds(petIds, pets, owner) {
   const petMiles = (petIds || [])
@@ -440,7 +505,7 @@ export default function App() {
       {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onSaveServiceWithChecklist={saveServiceWithChecklist} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onDeleteTravel={(t)=>requestDelete("pet_travel", t, "travel", `${niceDate(t.travel_date)} ${t.mileage || 0} km`)} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
     </main>}
 
-    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => changeMainTab(t)} style={tab === t ? S.navActive : S.navBtn}>{t}</button>)}</nav>
+    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => changeMainTab(t)} style={tab === t ? S.navActive : S.navBtn}><span style={S.navIcon}><Icon name={TAB_ICONS[t]} size={30}/></span><span>{t}</span></button>)}</nav>
 
     {infoPet && <PetInfoModal pet={infoPet} owner={ownerMap[infoPet.owner_id]} vetClinic={vetClinics.find(v=>v.id===infoPet.vet_clinic_id)} onClose={() => setPetInfoId("")} />}
     {paymentVisit && <PaymentModal visit={paymentVisit} owner={ownerMap[paymentVisit.owner_id]} service={serviceMap[paymentVisit.service_id]} onClose={() => setPaymentVisitId("")} onSave={savePayment} />}
@@ -471,9 +536,12 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
   const [editingVisitId, setEditingVisitId] = useState("");
   const [showAdvancedVisitDetails, setShowAdvancedVisitDetails] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
+  const [scheduleFilter, setScheduleFilter] = useState("Upcoming");
   const ownerPets = pets.filter(p => p.owner_id === form.owner_id && p.is_active).sort(byName);
   const petOptions = options.filter(o => petIds.includes(o.pet_id) && o.is_active);
-  const visibleVisits = visits.filter(v => ["Scheduled", "In Progress"].includes(v.status)).sort(visitSort);
+  const upcomingOnlyVisits = visits.filter(v => v.status === "Scheduled").sort(visitSort);
+  const activeOnlyVisits = visits.filter(v => v.status === "In Progress").sort(visitSort);
+  const visibleVisits = scheduleFilter === "Active" ? activeOnlyVisits : scheduleFilter === "Completed" ? [] : upcomingOnlyVisits;
   const completedVisits = visits.filter(v=>v.status==="Completed").sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`));
   const ownerRecentVisits = visits.filter(v => v.owner_id === form.owner_id).sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0, 4);
   function visitMileageFor(nextPetIds, ownerId = form.owner_id) {
@@ -543,10 +611,10 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
         </div>) : <Empty text="No recent visits for this owner yet." />}
       </div>}
     </Panel>
-    <Panel title="Upcoming / Active Visits">{visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text="No upcoming visits yet." />}</Panel>
-    <Panel title="Recently Completed Visits">
-      {completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 3).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No completed visits yet." />}
-      {completedVisits.length > 3 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}
+    <Panel title="Visits">
+      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>setScheduleFilter(f)}><span style={S.subTabIcon}><Icon name={f === "Active" ? "playCircle" : f === "Completed" ? "checkCircle" : "calendarCheck"} size={30}/></span><span>{f}</span></button>)}</div>
+      {scheduleFilter !== "Completed" && (visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text={scheduleFilter === "Active" ? "No visits in progress." : "No upcoming visits yet."} />)}
+      {scheduleFilter === "Completed" && <div style={S.stack}>{completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 6).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No completed visits yet." />}{completedVisits.length > 6 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}</div>}
     </Panel>
 
   </section>;
@@ -597,7 +665,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
     <div style={S.twoColBalanced}>
       <Panel title="Pet Owners">
         <button style={S.primaryBtn} onClick={newOwner}>New Owner</button>
-        <div style={S.list}>{owners.map(o=><button key={o.id} style={selectedOwnerId===o.id?S.listActive:S.listBtn} onClick={()=>{setSelectedOwnerId(o.id); setSelectedPetId(""); setOwnerEditMode(false); setOwnerTab("Owner Info"); window.scrollTo({top:0,behavior:"smooth"});}}>{o.name || "Unnamed owner"}<small>{o.phone || o.email || "No contact info"}</small></button>)}</div>
+        <div style={S.list}>{owners.map(o=><button key={o.id} style={selectedOwnerId===o.id?S.listActive:S.listBtn} onClick={()=>{setSelectedOwnerId(o.id); setSelectedPetId(""); setOwnerEditMode(false); setOwnerTab("Owner Info");}}>{o.name || "Unnamed owner"}<small>{o.phone || o.email || "No contact info"}</small></button>)}</div>
       </Panel>
 
       {!selectedOwnerId && ownerEditMode && <Panel title="New Owner">
@@ -607,7 +675,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 
       {selectedOwnerId && <Panel title="">
         <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
-        <div style={S.subTabs}>{OWNER_TABS.map(t=><button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
+        <div style={S.ownerSubGrid}>{OWNER_TABS.map(t=>{ const label = t === "Owner Info" ? "Details" : t === "Saved Services" ? "Services" : t === "Documents" ? "Docs" : t; return <button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}><span style={S.subTabIcon}><Icon name={OWNER_TAB_ICONS[t]} size={30}/></span><span>{label}</span></button>; })}</div>
 
         {ownerTab === "Owner Info" && <div style={S.stack}>
           {!ownerEditMode ? <OwnerSummary owner={selectedOwner} /> : <OwnerForm value={ownerForm} onChange={setOwnerForm} />}
@@ -618,7 +686,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
           <div style={S.row}><button style={S.primaryBtn} onClick={newPet}>Add Pet</button><span style={S.muted}>Each pet has its own profile, care notes, emergency info, checklist, and history.</span></div>
           <div style={S.petCards}>{ownerPets.map(p=><PetMini key={p.id} pet={p} active={selectedPetId===p.id} onClick={()=>{setSelectedPetId(p.id); setPetEditMode(false);}} onInfo={()=>onPetInfo(p.id)} />)}</div>
           {(selectedPet || petEditMode) && <div style={S.detailBox}>
-            <div style={S.subTabs}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
+            <div style={S.petSubGrid}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false);}}><span style={S.subTabIcon}><Icon name={PET_TAB_ICONS[t]} size={30}/></span><span>{t}</span></button>)}</div>
             {!petEditMode ? <PetReadOnly pet={selectedPet} petTab={petTab} visits={petVisits} serviceMap={serviceMap} visitPets={visitPets} petMap={petMap} petChecklist={petChecklist} vetClinics={vetClinics} /> : <PetForm value={petForm} onChange={setPetForm} vetClinics={vetClinics} onSaveVetClinic={onSaveVetClinic} />}
             <div style={S.row}>{!petEditMode ? <button style={S.secondaryBtn} onClick={()=>setPetEditMode(true)}>Edit Pet</button> : <button style={S.primaryBtn} onClick={()=>{onSavePet({...petForm, owner_id:selectedOwnerId}); setPetEditMode(false);}}>Save Pet</button>}{selectedPet?.id && <><button style={S.secondaryBtn} onClick={()=>onPetInfo(selectedPet.id)}>Emergency Info</button></>}</div>
             {selectedPet?.id && <div style={S.dangerZone}><b>Danger zone</b><small>Deleting a pet requires typing the exact pet name.</small><button style={S.dangerMini} onClick={()=>onDeletePet(selectedPet)}>Delete Pet</button></div>}
@@ -649,7 +717,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 function OfficePage(props) {
   const { officeTab, setOfficeTab } = props;
   return <section style={S.stack}>
-    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>{setOfficeTab(t); window.scrollTo({top:0,behavior:"smooth"});}}>{t}</button>)}</div>
+    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>{setOfficeTab(t); window.scrollTo({top:0,behavior:"smooth"});}}><span style={S.officeIcon}><Icon name={OFFICE_TAB_ICONS[t]} size={34}/></span><span>{t}</span></button>)}</div>
     {officeTab === "Reports" && <Reports {...props} />}
     {officeTab === "Services" && <ServicesAdmin {...props} />}
     {officeTab === "Vets" && <VetClinicsAdmin {...props} />}
@@ -986,7 +1054,7 @@ function ServicesAdmin({ services, serviceChecklist, onSaveService, onSaveServic
       <div style={S.row}><input placeholder="New checklist item" value={item} onChange={e=>setItem(e.target.value)} onKeyDown={e=>{ if(e.key === "Enter") addDraftItem(); }} /><button style={S.secondaryBtn} onClick={addDraftItem}>Add Checklist Item</button></div>
     </div>}
     <div style={S.row}><button style={S.primaryBtn} onClick={saveAll}>Save Service</button><button style={S.secondaryBtn} onClick={()=>{ setForm(blankService); setDraftItems([]); setItem(""); }}>New</button>{form.id&&<button style={S.dangerBtn} onClick={()=>onDeleteService(form)}>Delete</button>}</div>
-    <div style={S.cards}>{services.map(s=><div key={s.id} style={S.smallCard} onClick={()=>chooseService(s)}><b>{s.name}</b><span>{s.category}</span><span>{s.default_duration_minutes} min — {money(s.base_price)} — extra pet {money(s.extra_pet_price)}</span><ul>{serviceChecklist.filter(i=>i.service_id===s.id).map(i=><li key={i.id}>{i.label}</li>)}</ul></div>)}</div>
+    <div style={S.cards}>{services.map(s=><div key={s.id} style={{...S.smallCard,borderLeft:`6px solid ${serviceColor(s)}`}} onClick={()=>chooseService(s)}><b>{s.name}</b><span>{s.category}</span><span>{s.default_duration_minutes} min — {money(s.base_price)} — extra pet {money(s.extra_pet_price)}</span><ul>{serviceChecklist.filter(i=>i.service_id===s.id).map(i=><li key={i.id}>{i.label}</li>)}</ul></div>)}</div>
   </Panel>;
 }
 function VetClinicsAdmin({ vetClinics = [], onSaveVetClinic, onDeleteVetClinic }) {
@@ -1078,16 +1146,18 @@ function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
   return <Panel title="Deleted Items"><p style={S.muted}>Deleted items are logged here for reference. Restore can be added after the new data model is fully stable.</p>{deleted.map(d=><div key={d.id} style={S.reportRow}><b>{d.item_type}</b><span>{d.item_label}</span><span>{new Date(d.deleted_at).toLocaleString()}</span><button style={S.dangerMini} onClick={()=>onHardDeleteDeleted(d.id)}>Remove log</button></div>)}</Panel>;
 }
 function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit, onReschedule }) {
+  const [actionsOpen, setActionsOpen] = useState(false);
   const safePets = (pets || []).filter(Boolean);
   const canPetInfo = typeof onPetInfo === "function";
   const hasActions = !!(onCancel || onDeleteVisit || onReschedule);
-  return <div style={S.visitCard}>
+  const color = serviceColor(service);
+  return <div style={visitCardStyle(visit, service)}>
     <div>
       <b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b>
       <div>{owner?.name || "Unknown owner"} — {service?.name || "Service"}</div>
       <div style={S.petLine}>
         {safePets.length ? safePets.map(p => (
-          <button key={p.id} style={S.petChip} disabled={!canPetInfo} onClick={() => canPetInfo && onPetInfo(p.id)}>{p.name} Info</button>
+          <button key={p.id} style={{...S.petChip, background: hexToRgba(color,.12), color: color}} disabled={!canPetInfo} onClick={() => canPetInfo && onPetInfo(p.id)}>{p.name} Info</button>
         )) : <small style={S.muted}>No pet attached</small>}
       </div>
       <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
@@ -1097,15 +1167,20 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
       {["Scheduled","In Progress"].includes(visit.status) && onComplete && <button style={S.primaryMini} onClick={() => onComplete(visit.id)}>Complete</button>}
       {visit.status === "Completed" && !visit.is_paid && onMarkPaid && <button style={S.primaryMini} onClick={() => onMarkPaid(visit.id)}>Mark Paid</button>}
       {visit.status === "Completed" && visit.is_paid && onMarkUnpaid && <button style={S.secondaryMini} onClick={() => onMarkUnpaid(visit.id)}>Mark Unpaid</button>}
-      {hasActions && <details style={S.actionsMenu}>
-        <summary style={S.actionsSummary}>Actions</summary>
-        <div style={S.actionsBody}>
-          {visit.status !== "Completed" && onReschedule && <button style={S.secondaryMini} onClick={() => onReschedule(visit)}>Reschedule</button>}
-          {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => onCancel(visit.id)}>Cancel</button>}
-          {onDeleteVisit && <button style={S.dangerMini} onClick={() => onDeleteVisit(visit)}>Delete</button>}
-        </div>
-      </details>}
+      {hasActions && <button style={S.secondaryMini} onClick={() => setActionsOpen(true)}>Actions</button>}
     </div>
+    {actionsOpen && <div style={S.sheetShade} onClick={()=>setActionsOpen(false)}>
+      <div style={S.actionSheet} onClick={e=>e.stopPropagation()}>
+        <div style={S.sheetHandle}></div>
+        <div style={S.sheetHead}><b>Visit Actions</b><button style={S.secondaryMini} onClick={()=>setActionsOpen(false)}>Close</button></div>
+        <div style={S.sheetMeta}>{niceDate(visit.visit_date)} · {service?.name || "Service"}</div>
+        <div style={S.sheetActions}>
+          {visit.status !== "Completed" && onReschedule && <button style={S.secondaryBtn} onClick={() => { setActionsOpen(false); onReschedule(visit); }}>Reschedule</button>}
+          {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => { setActionsOpen(false); onCancel(visit.id); }}>Cancel Visit</button>}
+          {onDeleteVisit && <button style={S.dangerBtn} onClick={() => { setActionsOpen(false); onDeleteVisit(visit); }}>Delete Visit</button>}
+        </div>
+      </div>
+    </div>}
   </div>;
 }
 function CompleteModal({ visit, checklist, owner, pets, service, onToggleChecklist, onClose, onSave }) {
@@ -1292,11 +1367,27 @@ function documentPackageHtml(owner, pets, docs, settings) {
   const forms = docs.map(d => `<section style="break-inside:avoid;page-break-inside:avoid;margin-top:18px;border-top:1px solid #ddd;padding-top:14px"><h2>${escapeHtml(d.title)}</h2><p class="muted">Original file: ${escapeHtml(d.fileName)}</p>${prefillFormBody(d, owner, pets)}<div style="margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:18px"><div>Client signature: ______________________________</div><div>Date: __________________</div></div></section>`).join("");
   return `<div class="doc-head"><div><h1>${escapeHtml(settings?.business_name || "Pet Care by Kiri")}</h1><div>${escapeHtml(settings?.business_phone || "")}</div><div>${escapeHtml(settings?.business_email || "")}</div></div><div style="text-align:right"><h2>INTAKE DOCUMENTS</h2><div>${escapeHtml(owner?.name || "Selected owner")}</div><div>${new Date().toLocaleDateString()}</div></div></div><div class="bill-to">${ownerBlock}${petBlock}</div>${forms}<div class="footer">Please complete, sign, and return these documents before service begins.</div>`;
 }
+function formTextarea(label, height = 70) { return `<div style="margin-top:10px"><b>${escapeHtml(label)}</b><div style="min-height:${height}px;border:1px solid #ddd;border-radius:8px;padding:10px;margin-top:5px"></div></div>`; }
+function signatureBlock(label = "Client signature") { return `<div style="margin-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:18px"><div>${escapeHtml(label)}: ______________________________</div><div>Date: __________________</div></div>`; }
 function prefillFormBody(doc, owner, pets) {
   const petRows = (pets || []).map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.species)}</td><td>${escapeHtml(p.breed)}</td><td>${escapeHtml(p.age_text)}</td><td>${escapeHtml(p.medical_conditions || p.allergies || "")}</td></tr>`).join("");
-  if (doc.id === "client_household_intake") return `<table><tbody><tr><td>Owner name</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Phone</td><td>${escapeHtml(owner?.phone || "")}</td></tr><tr><td>Email</td><td>${escapeHtml(owner?.email || "")}</td></tr><tr><td>Address</td><td>${escapeHtml(owner?.address || "")}</td></tr><tr><td>Emergency contact</td><td>${escapeHtml([owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — "))}</td></tr><tr><td>Access instructions</td><td>${escapeHtml(owner?.access_instructions || "")}</td></tr></tbody></table>`;
-  if (doc.petSpecific || doc.id === "individual_pet_profile") return `<table><thead><tr><th>Pet</th><th>Species</th><th>Breed</th><th>Age</th><th>Medical / allergy notes</th></tr></thead><tbody>${petRows || `<tr><td colspan="5">Add pet details here.</td></tr>`}</tbody></table><p><b>Care / feeding / medication instructions:</b></p><p style="min-height:50px;border:1px solid #ddd;border-radius:8px;padding:10px">${escapeHtml((pets || []).map(p => `${p.name}: ${[p.feeding_instructions, p.medication_instructions, p.care_notes].filter(Boolean).join(" | ")}`).filter(Boolean).join("\n"))}</p>`;
-  return `<p>This form is part of the ${escapeHtml(doc.group)} package for ${escapeHtml(owner?.name || "the client")}.</p><p style="min-height:80px;border:1px solid #ddd;border-radius:8px;padding:10px">Notes / terms / client initials:</p>`;
+  const petCareRows = (pets || []).map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.feeding_instructions || "")}</td><td>${escapeHtml(p.medication_instructions || "")}</td><td>${escapeHtml(p.care_notes || "")}</td></tr>`).join("");
+  if (doc.id === "client_household_intake") return `<h3>Client Contact Details</h3><table><tbody><tr><td>Owner name</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Phone</td><td>${escapeHtml(owner?.phone || "")}</td></tr><tr><td>Email</td><td>${escapeHtml(owner?.email || "")}</td></tr><tr><td>Invoice email</td><td>${escapeHtml(owner?.invoice_email || "")}</td></tr><tr><td>Address</td><td>${escapeHtml(owner?.address || "")}</td></tr><tr><td>Emergency contact</td><td>${escapeHtml([owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — "))}</td></tr></tbody></table>${formTextarea("Home access instructions", 55)}${formTextarea("House instructions / client notes", 70)}`;
+  if (doc.id === "individual_pet_profile") return `<h3>Pet Profile Details</h3><table><thead><tr><th>Pet</th><th>Species</th><th>Breed</th><th>Age</th><th>Medical / allergy notes</th></tr></thead><tbody>${petRows || `<tr><td colspan="5">Add pet details here.</td></tr>`}</tbody></table>${formTextarea("Daily routine / temperament / comfort notes", 80)}`;
+  if (doc.id === "vet_authorization") return `<h3>Veterinary Authorization</h3><p>I authorize Pet Care by Kiri to seek veterinary care for my pet(s) if urgent care is needed and I cannot be reached.</p><table><thead><tr><th>Pet</th><th>Vet / clinic</th><th>Medical notes</th><th>Allergies</th></tr></thead><tbody>${(pets||[]).map(p=>`<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.vet_name || "")}</td><td>${escapeHtml(p.medical_conditions || "")}</td><td>${escapeHtml(p.allergies || "")}</td></tr>`).join("") || `<tr><td colspan="4">Pet / clinic details</td></tr>`}</tbody></table>${formTextarea("Emergency limits / approved treatment instructions", 70)}`;
+  if (doc.id === "home_access") return `<h3>Home Access / Key Security</h3><table><tbody><tr><td>Access address</td><td>${escapeHtml(owner?.address || "")}</td></tr><tr><td>Access instructions</td><td>${escapeHtml(owner?.access_instructions || "")}</td></tr><tr><td>Emergency contact</td><td>${escapeHtml([owner?.emergency_contact_name, owner?.emergency_contact_phone].filter(Boolean).join(" — "))}</td></tr></tbody></table>${formTextarea("Key / lockbox / alarm instructions", 85)}${formTextarea("Client initials / key return notes", 45)}`;
+  if (doc.id === "service_agreement") return `<h3>Service Agreement</h3><p>This agreement confirms the client understands the scheduled pet care services, payment expectations, cancellation expectations, and care limitations.</p><table><tbody><tr><td>Client</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Pets</td><td>${escapeHtml((pets||[]).map(p=>p.name).join(", "))}</td></tr></tbody></table>${formTextarea("Services requested / special terms", 80)}${formTextarea("Client initials", 35)}`;
+  if (doc.id === "policies_pricing") return `<h3>Policies / Pricing Acknowledgement</h3><p>Client confirms they have reviewed service pricing, payment timing, cancellation policies, and any travel or extra-pet fees that may apply.</p><table><tbody><tr><td>Client</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Billing notes</td><td>${escapeHtml(owner?.billing_notes || owner?.payment_notes || "")}</td></tr></tbody></table>${formTextarea("Policy notes / client initials", 70)}`;
+  if (doc.id === "medication_auth") return `<h3>Medication Authorization</h3><table><thead><tr><th>Pet</th><th>Medication instructions</th><th>Medical conditions</th><th>Allergies</th></tr></thead><tbody>${(pets||[]).map(p=>`<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.medication_instructions || "")}</td><td>${escapeHtml(p.medical_conditions || "")}</td><td>${escapeHtml(p.allergies || "")}</td></tr>`).join("") || `<tr><td colspan="4">Medication details</td></tr>`}</tbody></table>${formTextarea("Medication name / dose / timing / permission notes", 90)}`;
+  if (doc.id === "medication_log") return `<h3>Medication Administration Log</h3><table><thead><tr><th>Date</th><th>Time</th><th>Pet</th><th>Medication</th><th>Dose</th><th>Given by</th></tr></thead><tbody>${Array.from({length:8},()=>`<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>`).join("")}</tbody></table>`;
+  if (doc.id === "dog_walking") return `<h3>Dog Walking Consent / Rules</h3><p>Client confirms leash, harness, handling, and safety instructions for dog walking services.</p><table><thead><tr><th>Pet</th><th>Leash / harness notes</th><th>Behavior notes</th><th>Emergency notes</th></tr></thead><tbody>${(pets||[]).filter(p=>String(p.species||"").toLowerCase().includes("dog")).map(p=>`<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.leash_harness_notes || "")}</td><td>${escapeHtml(p.behavior_notes || "")}</td><td>${escapeHtml(p.emergency_instructions || "")}</td></tr>`).join("") || `<tr><td colspan="4">Dog walking details</td></tr>`}</tbody></table>${formTextarea("Walking rules / approved routes / off-leash restrictions", 70)}`;
+  if (doc.id === "overnight") return `<h3>Overnight / In-Home Sitting Add-On</h3><table><tbody><tr><td>Home address</td><td>${escapeHtml(owner?.address || "")}</td></tr><tr><td>House instructions</td><td>${escapeHtml(owner?.house_instructions || "")}</td></tr></tbody></table>${formTextarea("Overnight routine / sleeping arrangements / home rules", 90)}${formTextarea("Emergency home instructions", 60)}`;
+  if (doc.id === "photo_consent") return `<h3>Photo / Marketing Consent</h3><p>Client may choose whether pet photos may be used for updates, social media, marketing, or private client communication only.</p><table><tbody><tr><td>Client</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Pets</td><td>${escapeHtml((pets||[]).map(p=>p.name).join(", "))}</td></tr></tbody></table><p>Consent choice: ☐ Yes, public marketing use &nbsp;&nbsp; ☐ Updates only &nbsp;&nbsp; ☐ No public use</p>`;
+  if (doc.id === "visit_notes") return `<h3>Visit Checklist / Completion Notes</h3><table><thead><tr><th>Pet</th><th>Feeding</th><th>Medication</th><th>Care notes</th></tr></thead><tbody>${petCareRows || `<tr><td colspan="4">Visit care details</td></tr>`}</tbody></table>${formTextarea("Visit completion notes", 90)}`;
+  if (doc.id === "meet_greet") return `<h3>Meet & Greet Safety Checklist</h3><p>Review access, emergency contacts, pet handling, feeding, medication, and home safety before the first service.</p><p>☐ Keys/access confirmed &nbsp; ☐ Vet info confirmed &nbsp; ☐ Feeding confirmed &nbsp; ☐ Medication confirmed &nbsp; ☐ Behavior risks reviewed</p>${formTextarea("Safety observations / follow-up items", 90)}`;
+  if (doc.id === "incident_report") return `<h3>Incident Report</h3><table><tbody><tr><td>Date/time</td><td></td></tr><tr><td>Owner</td><td>${escapeHtml(owner?.name || "")}</td></tr><tr><td>Pet(s)</td><td>${escapeHtml((pets||[]).map(p=>p.name).join(", "))}</td></tr><tr><td>Type of incident</td><td>☐ Health ☐ Injury ☐ Behavior ☐ Home/access ☐ Other</td></tr></tbody></table>${formTextarea("What happened?", 110)}${formTextarea("Action taken / owner notified / vet contacted", 90)}`;
+  if (doc.id === "incident_follow_up") return `<h3>Incident Follow-Up Checklist</h3><p>☐ Owner contacted &nbsp; ☐ Vet contacted if needed &nbsp; ☐ Photos attached &nbsp; ☐ Next visit instructions updated &nbsp; ☐ Follow-up completed</p>${formTextarea("Follow-up notes", 100)}`;
+  return `<p>This form is part of the ${escapeHtml(doc.group)} package for ${escapeHtml(owner?.name || "the client")}.</p>${formTextarea("Notes / terms / client initials", 80)}`;
 }
 function OwnerDocumentsPanel({ owner, pets, ownerDocuments, onUploadDocument, onDeleteDocument, settings }) {
   const [selectedIds, setSelectedIds] = useState(CORE_DOCUMENT_IDS);
@@ -1450,7 +1541,7 @@ function PetForm({ value, onChange, vetClinics = [], onSaveVetClinic }) {
     </div><button style={S.secondaryBtn} onClick={()=>{ if(newVet.clinic_name.trim()){ onSaveVetClinic(newVet); setNewVet({ clinic_name:"", phone:"", emergency_phone:"", address:"", notes:"" }); }}}>Save Vet Clinic</button></details>
   </div>;
 }
-function ServiceForm({ value, onChange }) { return <div style={S.formGrid}>{["name","category","default_duration_minutes","base_price","extra_pet_price"].map(k=><Field key={k} label={k.replaceAll("_"," ")}><input type={["default_duration_minutes","base_price","extra_pet_price"].includes(k)?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}<label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!value.taxable} onChange={e=>onChange({...value,taxable:e.target.checked})}/> <span>Taxable</span></label><Field label="Description"><textarea value={value.description||""} onChange={e=>onChange({...value,description:e.target.value})}/></Field></div>; }
+function ServiceForm({ value, onChange }) { return <div style={S.formGrid}>{["name","category","default_duration_minutes","base_price","extra_pet_price"].map(k=><Field key={k} label={k.replaceAll("_"," ")}><input type={["default_duration_minutes","base_price","extra_pet_price"].includes(k)?"number":"text"} value={value[k]||""} onChange={e=>onChange({...value,[k]:e.target.value})}/></Field>)}<Field label="service color"><div style={S.colorPickRow}>{DEFAULT_SERVICE_COLORS.map(c=><button key={c} type="button" title={c} onClick={()=>onChange({...value,service_color:c})} style={{...S.colorDot, background:c, outline:(value.service_color||serviceColor(value))===c?"3px solid #071746":"1px solid #dbeafe"}} />)}<input type="color" value={value.service_color || serviceColor(value)} onChange={e=>onChange({...value,service_color:e.target.value})}/></div></Field><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!value.taxable} onChange={e=>onChange({...value,taxable:e.target.checked})}/> <span>Taxable</span></label><Field label="Description"><textarea value={value.description||""} onChange={e=>onChange({...value,description:e.target.value})}/></Field></div>; }
 function OptionForm({ value, onChange, services, pets=[] }) { return <div style={S.formGrid}>
   <Field label="Option name"><input value={value.option_name||""} onChange={e=>onChange({...value,option_name:e.target.value})}/></Field>
   {pets.length > 0 && <Field label="Pet"><select value={value.pet_id||""} onChange={e=>onChange({...value,pet_id:e.target.value})}><option value="">Select pet</option>{pets.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}
@@ -1487,7 +1578,7 @@ function PetMini({ pet, active, onClick, onInfo }) {
 }
 
 const S = {
-  app:{minHeight:"100svh",background:"radial-gradient(circle at top left,rgba(15,98,254,.10),transparent 280px),radial-gradient(circle at 80% 20%,rgba(255,51,102,.08),transparent 240px),linear-gradient(180deg,#fffaf2 0%,#ffffff 46%,#f5fbff 100%)",color:"#08153a",paddingBottom:94,fontFamily:"system-ui,Segoe UI,Roboto,sans-serif"},
+  app:{minHeight:"100svh",background:"radial-gradient(circle at top left,rgba(15,98,254,.10),transparent 280px),radial-gradient(circle at 80% 20%,rgba(255,51,102,.08),transparent 240px),linear-gradient(180deg,#fffaf2 0%,#ffffff 46%,#f5fbff 100%)",color:"#08153a",paddingBottom:108,fontFamily:"system-ui,Segoe UI,Roboto,sans-serif"},
   header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"18px 14px 8px",maxWidth:430,margin:"0 auto"},
   kicker:{display:"none"},
   title:{fontSize:26,margin:0,fontWeight:950,color:"#071746",lineHeight:1.02,letterSpacing:"-1.1px"},
@@ -1504,9 +1595,10 @@ const S = {
   error:{maxWidth:430,margin:"8px auto",padding:12,borderRadius:16,background:"#fff1f2",color:"#9f1239",textAlign:"left"},
   toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#071746",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"},
   saving:{position:"fixed",right:16,bottom:95,background:"#071746",color:"#fff",padding:"10px 14px",borderRadius:16,zIndex:60},
-  bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"min(100%,430px)",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"8px 8px calc(8px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.94)",borderTop:"1px solid rgba(191,219,254,.9)",borderLeft:"1px solid rgba(191,219,254,.55)",borderRight:"1px solid rgba(191,219,254,.55)",borderRadius:"24px 24px 0 0",backdropFilter:"blur(16px)",zIndex:40,boxShadow:"0 -18px 42px rgba(8,21,58,.12)"},
-  navBtn:{border:"1px solid rgba(191,219,254,.95)",background:"#fff",borderRadius:19,padding:"13px 4px",fontWeight:900,color:"#334155",fontSize:14,boxShadow:"0 5px 12px rgba(8,21,58,.04)"},
-  navActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#eff6ff,#ffffff)",borderRadius:19,padding:"13px 4px",fontWeight:950,color:"#0f62fe",fontSize:14,boxShadow:"0 12px 28px rgba(15,98,254,.22)"},
+  bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"min(100%,430px)",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,padding:"10px 10px calc(10px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.94)",borderTop:"1px solid rgba(191,219,254,.9)",borderLeft:"1px solid rgba(191,219,254,.55)",borderRight:"1px solid rgba(191,219,254,.55)",borderRadius:"24px 24px 0 0",backdropFilter:"blur(16px)",zIndex:40,boxShadow:"0 -18px 42px rgba(8,21,58,.12)"},
+  navBtn:{border:"0",background:"transparent",borderRadius:22,padding:"10px 3px",fontWeight:850,color:"#334155",fontSize:13,display:"grid",gap:5,placeItems:"center",position:"relative",minHeight:74},
+  navActive:{border:"1px solid #dbeafe",background:"linear-gradient(180deg,#ffffff,#eff6ff)",borderRadius:24,padding:"10px 3px",fontWeight:950,color:"#0f62fe",fontSize:13,display:"grid",gap:5,placeItems:"center",position:"relative",boxShadow:"0 14px 30px rgba(8,21,58,.18)",minHeight:78,borderBottom:"4px solid #0f62fe"},
+  navIcon:{lineHeight:1,display:"grid",placeItems:"center",color:"currentColor"},
   primaryBtn:{border:0,background:"linear-gradient(135deg,#0f62fe 0%,#19b7ff 45%,#2dd4bf 100%)",color:"#fff",borderRadius:18,padding:"13px 18px",fontWeight:950,boxShadow:"0 14px 28px rgba(15,98,254,.25)",minHeight:48},
   secondaryBtn:{border:"1px solid #bfdbfe",background:"#fff",color:"#071746",borderRadius:18,padding:"12px 15px",fontWeight:900,minHeight:46},
   ghostBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.72)",borderRadius:16,padding:"10px 13px",fontWeight:900},
@@ -1516,9 +1608,17 @@ const S = {
   secondaryMini:{border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900},
   dangerMini:{border:0,background:"#ffe4e6",color:"#be123c",borderRadius:14,padding:"9px 11px",fontWeight:900},
   cardActionsCompact:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:8},
+  sheetShade:{position:"fixed",inset:0,background:"rgba(8,21,58,.40)",zIndex:95,display:"grid",alignItems:"end",padding:"16px 12px calc(16px + env(safe-area-inset-bottom))"},
+  actionSheet:{width:"min(430px,100%)",margin:"0 auto",background:"#fff",borderRadius:"26px 26px 20px 20px",padding:16,boxShadow:"0 -26px 80px rgba(8,21,58,.30)",border:"1px solid #dbeafe",display:"grid",gap:12},
+  sheetHandle:{width:48,height:5,borderRadius:999,background:"#cbd5e1",justifySelf:"center"},
+  sheetHead:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10},
+  sheetMeta:{color:"#64748b",fontWeight:800},
+  sheetActions:{display:"grid",gap:10},
   actionsMenu:{position:"relative",display:"inline-block"},
   actionsSummary:{listStyle:"none",cursor:"pointer",border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900,fontSize:14},
   actionsBody:{position:"absolute",right:0,top:"calc(100% + 6px)",zIndex:30,display:"grid",gap:6,minWidth:140,padding:8,border:"1px solid #dbeafe",borderRadius:14,background:"#fff",boxShadow:"0 16px 34px rgba(8,21,58,.18)"},
+  colorPickRow:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"},
+  colorDot:{width:32,height:32,borderRadius:999,border:0,boxShadow:"0 8px 18px rgba(8,21,58,.16)"},
   formGrid:{display:"grid",gridTemplateColumns:"1fr",gap:12},
   formGridPadded:{display:"grid",gridTemplateColumns:"1fr",gap:12,padding:"0 14px 14px"},
   field:{display:"grid",gap:6,fontWeight:900,color:"#4b3529"},
@@ -1531,9 +1631,12 @@ const S = {
   list:{display:"grid",gap:9,maxHeight:260,overflow:"auto"},
   listBtn:{textAlign:"left",border:"1px solid #dbeafe",background:"#fff",borderRadius:18,padding:13,display:"grid",gap:3},
   listActive:{textAlign:"left",border:"1px solid #0f62fe",background:"linear-gradient(145deg,#eff6ff,#fff7ed)",borderRadius:18,padding:13,display:"grid",gap:3,boxShadow:"0 10px 24px rgba(15,98,254,.13)"},
-  subTabs:{display:"flex",gap:8,flexWrap:"nowrap",overflowX:"auto",margin:"10px -4px 14px",padding:"2px 4px 8px",scrollbarWidth:"none"},
-  subTab:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 13px",fontWeight:900,whiteSpace:"nowrap"},
-  subTabActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:999,padding:"10px 13px",fontWeight:950,color:"#0f62fe",whiteSpace:"nowrap",boxShadow:"0 8px 18px rgba(15,98,254,.18)"},
+  subTabs:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
+  ownerSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
+  petSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
+  subTab:{border:"1px solid #dbeafe",background:"#fff",borderRadius:20,padding:"12px 7px",fontWeight:850,whiteSpace:"normal",display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",minWidth:0,color:"#334155",minHeight:88,textAlign:"center",overflow:"hidden"},
+  subTabActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#fff,#eff6ff)",borderRadius:20,padding:"12px 7px",fontWeight:950,color:"#0f62fe",whiteSpace:"normal",display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",minWidth:0,minHeight:88,textAlign:"center",boxShadow:"0 10px 22px rgba(15,98,254,.14)",borderBottom:"4px solid #0f62fe",overflow:"hidden"},
+  subTabIcon:{lineHeight:1,display:"grid",placeItems:"center",color:"currentColor"},
   detailBox:{border:"1px solid #dbeafe",borderRadius:24,padding:14,background:"#fff",display:"grid",gap:12,boxShadow:"0 12px 30px rgba(8,21,58,.055)"},
   infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:9},
   info:{border:"1px solid #e5e7eb",borderRadius:17,padding:13,background:"#fff"},
@@ -1578,9 +1681,13 @@ const S = {
   petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:7},
   petChip:{border:0,background:"#dcfce7",borderRadius:999,padding:"7px 10px",fontWeight:900,color:"#14532d"},
   status:{fontSize:12,fontWeight:950,color:"#64748b"},
-  officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8},
-  officeBtn:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"11px 13px",fontWeight:900},
-  officeActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:999,padding:"11px 13px",fontWeight:950,color:"#0f62fe"},
+  officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10},
+  officeIcon:{display:"grid",placeItems:"center",color:"currentColor"},
+  officeBtn:{border:"1px solid #dbeafe",background:"#fff",borderRadius:22,padding:"15px 10px",fontWeight:900,display:"grid",gridTemplateRows:"40px auto",gap:6,placeItems:"center",color:"#334155",minHeight:106},
+  officeActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:22,padding:"15px 10px",fontWeight:950,color:"#0f62fe",display:"grid",gridTemplateRows:"40px auto",gap:6,placeItems:"center",borderBottom:"5px solid #0f62fe",minHeight:106,boxShadow:"0 10px 24px rgba(15,98,254,.14)"},
+  scheduleFilters:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"0 0 12px"},
+  scheduleFilter:{border:"1px solid #dbeafe",background:"#fff",borderRadius:20,padding:"12px 6px",fontWeight:900,display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",color:"#334155",minHeight:88},
+  scheduleFilterActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#fff,#eff6ff)",borderRadius:20,padding:"12px 6px",fontWeight:950,display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",color:"#0f62fe",minHeight:88,borderBottom:"4px solid #0f62fe",boxShadow:"0 10px 22px rgba(15,98,254,.14)"},
   reportRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,alignItems:"center",borderBottom:"1px solid #eff6ff",padding:"11px 0"},
   billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
   billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
