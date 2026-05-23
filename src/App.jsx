@@ -1,13 +1,35 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 
-const VERSION = "PET_CARE_V21_NAV_CLEANUP";
+const VERSION = "PET_CARE_V25_ICON_ONLY_TILES";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
 
-const TAB_ICONS = { Today: "home", Schedule: "calendarCheck", Owners: "paw", Office: "briefcase" };
-const OWNER_TAB_ICONS = { "Owner Info": "user", Pets: "paw", Documents: "folder", "Saved Services": "star", Visits: "calendarCheck", Billing: "receipt" };
+const ICON_IMAGES = {
+  tabHome: "/icons/tab-home.png",
+  tabSchedule: "/icons/tab-schedule.png",
+  tabOwners: "/icons/tab-owners.png",
+  tabOffice: "/icons/tab-office.png",
+  scheduleUpcoming: "/icons/schedule-upcoming.png",
+  scheduleActive: "/icons/schedule-active.png",
+  scheduleCompleted: "/icons/schedule-completed.png",
+  ownerDetails: "/icons/owner-details.png",
+  ownerPets: "/icons/owner-pets.png",
+  ownerDocs: "/icons/owner-docs.png",
+  ownerScheduleVisit: "/icons/schedule-visit.png",
+  ownerVisits: "/icons/visits.png",
+  ownerBilling: "/icons/billing.png",
+  officeReports: "/icons/reports.png",
+  officeServices: "/icons/services.png",
+  officeVets: "/icons/vets.png",
+  officeTravel: "/icons/travel.png",
+  officeSettings: "/icons/settings.png",
+  officeDeleted: "/icons/deleted.png",
+};
+const TAB_IMAGE_ICONS = { Today: ICON_IMAGES.tabHome, Schedule: ICON_IMAGES.tabSchedule, Owners: ICON_IMAGES.tabOwners, Office: ICON_IMAGES.tabOffice };
+const OWNER_TAB_IMAGE_ICONS = { "Owner Info": ICON_IMAGES.ownerDetails, Pets: ICON_IMAGES.ownerPets, Documents: ICON_IMAGES.ownerDocs, "Schedule Visit": ICON_IMAGES.ownerScheduleVisit, Visits: ICON_IMAGES.ownerVisits, Billing: ICON_IMAGES.ownerBilling };
+const OFFICE_TAB_IMAGE_ICONS = { Reports: ICON_IMAGES.officeReports, Services: ICON_IMAGES.officeServices, Vets: ICON_IMAGES.officeVets, Travel: ICON_IMAGES.officeTravel, Settings: ICON_IMAGES.officeSettings, Deleted: ICON_IMAGES.officeDeleted };
 const PET_TAB_ICONS = { Profile: "paw", Care: "heartPulse", Emergency: "alertTriangle", Checklist: "squareCheck", History: "history" };
 const OFFICE_TAB_ICONS = { Reports: "barChart", Services: "bone", Vets: "cross", Travel: "car", Settings: "settings", Deleted: "trash" };
 const SCHEDULE_FILTERS = ["Upcoming", "Active", "Completed"];
@@ -103,6 +125,21 @@ function visitSort(a,b) { return `${a.visit_date || ""} ${a.scheduled_start_time
 function splitLines(text) { return String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean); }
 function tableError(err) { return err?.message || String(err || "Unknown error"); }
 
+function AppImageIcon({ src, size = 56, style }) {
+  return <img src={src} alt="" aria-hidden="true" style={{ width:size, height:size, objectFit:"contain", display:"block", filter:"drop-shadow(0 8px 14px rgba(8,21,58,.16))", ...style }} />;
+}
+
+function IconTileCard({ src, label, zoom = 1, labelStyle }) {
+  return <>
+    <span style={S.iconTileFill}>
+      <img src={src} alt="" aria-hidden="true" style={{ ...S.iconTileImage, transform: `scale(${zoom})` }} />
+      <span style={S.iconTileShine} />
+      <span style={S.iconTileScrim} />
+    </span>
+    <span style={{ ...S.iconTileLabel, ...labelStyle }}>{label}</span>
+  </>;
+}
+
 function Icon({ name, size = 24, strokeWidth = 2.25, style }) {
   const common = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", strokeWidth };
   const paths = {
@@ -175,6 +212,7 @@ function defaultMileageForPetIds(petIds, pets, owner) {
 export default function App() {
   const [tab, setTab] = useState("Today");
   const [officeTab, setOfficeTab] = useState("Reports");
+  const [scheduleSeed, setScheduleSeed] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState("");
@@ -215,6 +253,12 @@ export default function App() {
   useEffect(() => { loadAll(); }, []);
 
   function scrollToTopNow() {
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+  function scheduleVisitForOwner(ownerId) {
+    if (!ownerId) return;
+    setScheduleSeed({ ownerId, stamp: Date.now() });
+    setTab("Schedule");
     requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
 
@@ -500,12 +544,12 @@ export default function App() {
     {toast && <div style={S.toast} onAnimationEnd={() => setToast("")}>{toast}</div>}
     {loading ? <div style={S.card}>Loading pet care data...</div> : <main key={`${tab}-${officeTab}`} style={S.main} className="page-transition">
       {tab === "Today" && <TodayPage visits={todayVisits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
-      {tab === "Schedule" && <SchedulePage owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
-      {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} ownerDocuments={ownerDocuments} onUploadDocument={uploadOwnerDocument} onDeleteDocument={(d)=>requestDelete("pet_client_documents", d, "client_document", d.file_name || d.document_type)} settings={settings} />}
+      {tab === "Schedule" && <SchedulePage scheduleSeed={scheduleSeed} owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
+      {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} ownerDocuments={ownerDocuments} onUploadDocument={uploadOwnerDocument} onDeleteDocument={(d)=>requestDelete("pet_client_documents", d, "client_document", d.file_name || d.document_type)} settings={settings} onScheduleVisit={scheduleVisitForOwner} />}
       {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onSaveServiceWithChecklist={saveServiceWithChecklist} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onDeleteTravel={(t)=>requestDelete("pet_travel", t, "travel", `${niceDate(t.travel_date)} ${t.mileage || 0} km`)} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
     </main>}
 
-    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => changeMainTab(t)} style={tab === t ? S.navActive : S.navBtn}><span style={S.navIcon}><Icon name={TAB_ICONS[t]} size={30}/></span><span>{t}</span></button>)}</nav>
+    <nav style={S.bottomNav}>{TABS.map(t => <button key={t} onClick={() => changeMainTab(t)} style={tab === t ? S.navActive : S.navBtn}><IconTileCard src={TAB_IMAGE_ICONS[t]} label={t} zoom={1} labelStyle={S.navTileLabel} /></button>)}</nav>
 
     {infoPet && <PetInfoModal pet={infoPet} owner={ownerMap[infoPet.owner_id]} vetClinic={vetClinics.find(v=>v.id===infoPet.vet_clinic_id)} onClose={() => setPetInfoId("")} />}
     {paymentVisit && <PaymentModal visit={paymentVisit} owner={ownerMap[paymentVisit.owner_id]} service={serviceMap[paymentVisit.service_id]} onClose={() => setPaymentVisitId("")} onSave={savePayment} />}
@@ -530,7 +574,7 @@ function TodayPage({ visits, activeVisits, overdueVisits, owners, pets, services
     <Panel title="Today’s Schedule">{visits.length ? visits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No services scheduled for today." />}</Panel>
   </section>;
 }
-function SchedulePage({ owners, pets, services, options, visits, visitPets, ownerMap, petMap, serviceMap, onAdd, onUpdate, onRepeatLast, onRepeatVisit, onStart, onComplete, onPetInfo, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
+function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, visitPets, ownerMap, petMap, serviceMap, onAdd, onUpdate, onRepeatLast, onRepeatVisit, onStart, onComplete, onPetInfo, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
   const [form, setForm] = useState(blankVisit);
   const [petIds, setPetIds] = useState([]);
   const [editingVisitId, setEditingVisitId] = useState("");
@@ -551,8 +595,15 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
     const activePets = pets.filter(p => p.owner_id === id && p.is_active).sort(byName);
     const autoPetIds = activePets.length === 1 ? [activePets[0].id] : [];
     setPetIds(autoPetIds);
-    setForm({...form, owner_id:id, primary_pet_id:autoPetIds[0] || "", saved_option_id:"", mileage:defaultMileageForPetIds(autoPetIds, pets, ownerMap[id])});
+    setForm(f => ({...f, owner_id:id, primary_pet_id:autoPetIds[0] || "", saved_option_id:"", mileage:defaultMileageForPetIds(autoPetIds, pets, ownerMap[id])}));
   }
+  useEffect(() => {
+    if (!scheduleSeed?.ownerId) return;
+    pickOwner(scheduleSeed.ownerId);
+    setEditingVisitId("");
+    setShowAdvancedVisitDetails(false);
+    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }, [scheduleSeed?.stamp]);
   function togglePet(id) {
     setPetIds(prev => {
       const next = prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id];
@@ -612,15 +663,15 @@ function SchedulePage({ owners, pets, services, options, visits, visitPets, owne
       </div>}
     </Panel>
     <Panel title="Visits">
-      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>setScheduleFilter(f)}><span style={S.subTabIcon}><Icon name={f === "Active" ? "playCircle" : f === "Completed" ? "checkCircle" : "calendarCheck"} size={30}/></span><span>{f}</span></button>)}</div>
+      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>setScheduleFilter(f)}><IconTileCard src={f === "Active" ? ICON_IMAGES.scheduleActive : f === "Completed" ? ICON_IMAGES.scheduleCompleted : ICON_IMAGES.scheduleUpcoming} label={f} zoom={1} /></button>)}</div>
       {scheduleFilter !== "Completed" && (visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text={scheduleFilter === "Active" ? "No visits in progress." : "No upcoming visits yet."} />)}
       {scheduleFilter === "Completed" && <div style={S.stack}>{completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 6).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No completed visits yet." />}{completedVisits.length > 6 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}</div>}
     </Panel>
 
   </section>;
 }
-function OwnersPage({ owners, pets, services, options, petChecklist, visits, visitPets, selectedOwnerId, selectedPetId, setSelectedOwnerId, setSelectedPetId, ownerMap, petMap, serviceMap, onSaveOwner, onSavePet, onSaveOption, onAddPetChecklist, onDeleteOwner, onDeletePet, onDeleteOption, vetClinics, onSaveVetClinic, onPetInfo, onMarkPaid, onMarkUnpaid, onMarkManyPaid, onDeleteVisit, ownerDocuments = [], onUploadDocument, onDeleteDocument, settings }) {
-  const OWNER_TABS = ["Owner Info", "Pets", "Documents", "Saved Services", "Visits", "Billing"];
+function OwnersPage({ owners, pets, services, options, petChecklist, visits, visitPets, selectedOwnerId, selectedPetId, setSelectedOwnerId, setSelectedPetId, ownerMap, petMap, serviceMap, onSaveOwner, onSavePet, onSaveOption, onAddPetChecklist, onDeleteOwner, onDeletePet, onDeleteOption, vetClinics, onSaveVetClinic, onPetInfo, onMarkPaid, onMarkUnpaid, onMarkManyPaid, onDeleteVisit, ownerDocuments = [], onUploadDocument, onDeleteDocument, settings, onScheduleVisit }) {
+  const OWNER_TABS = ["Owner Info", "Pets", "Documents", "Schedule Visit", "Visits", "Billing"];
   const PET_TABS = ["Profile", "Care", "Emergency", "Checklist", "History"];
   const [ownerTab, setOwnerTab] = useState("Owner Info");
   const [petTab, setPetTab] = useState("Profile");
@@ -675,7 +726,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 
       {selectedOwnerId && <Panel title="">
         <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
-        <div style={S.ownerSubGrid}>{OWNER_TABS.map(t=>{ const label = t === "Owner Info" ? "Details" : t === "Saved Services" ? "Services" : t === "Documents" ? "Docs" : t; return <button key={t} style={ownerTab===t?S.subTabActive:S.subTab} onClick={()=>{setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}><span style={S.subTabIcon}><Icon name={OWNER_TAB_ICONS[t]} size={30}/></span><span>{label}</span></button>; })}</div>
+        <div style={S.ownerSubGrid}>{OWNER_TABS.map(t=>{ const label = t === "Owner Info" ? "Details" : t === "Documents" ? "Docs" : t; const isScheduleVisit = t === "Schedule Visit"; return <button key={t} style={ownerTab===t&&!isScheduleVisit?S.subTabActive:S.subTab} onClick={()=>{ if (isScheduleVisit) { onScheduleVisit?.(selectedOwnerId); return; } setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}><IconTileCard src={OWNER_TAB_IMAGE_ICONS[t]} label={label} zoom={1} /></button>; })}</div>
 
         {ownerTab === "Owner Info" && <div style={S.stack}>
           {!ownerEditMode ? <OwnerSummary owner={selectedOwner} /> : <OwnerForm value={ownerForm} onChange={setOwnerForm} />}
@@ -717,7 +768,7 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
 function OfficePage(props) {
   const { officeTab, setOfficeTab } = props;
   return <section style={S.stack}>
-    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>{setOfficeTab(t); window.scrollTo({top:0,behavior:"smooth"});}}><span style={S.officeIcon}><Icon name={OFFICE_TAB_ICONS[t]} size={34}/></span><span>{t}</span></button>)}</div>
+    <div style={S.officeNav}>{OFFICE_TABS.map(t=><button key={t} style={officeTab===t?S.officeActive:S.officeBtn} onClick={()=>{setOfficeTab(t); window.scrollTo({top:0,behavior:"smooth"});}}><IconTileCard src={OFFICE_TAB_IMAGE_ICONS[t]} label={t} zoom={1} labelStyle={S.officeTileLabel} /></button>)}</div>
     {officeTab === "Reports" && <Reports {...props} />}
     {officeTab === "Services" && <ServicesAdmin {...props} />}
     {officeTab === "Vets" && <VetClinicsAdmin {...props} />}
@@ -1596,8 +1647,8 @@ const S = {
   toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#071746",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"},
   saving:{position:"fixed",right:16,bottom:95,background:"#071746",color:"#fff",padding:"10px 14px",borderRadius:16,zIndex:60},
   bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"min(100%,430px)",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,padding:"10px 10px calc(10px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.94)",borderTop:"1px solid rgba(191,219,254,.9)",borderLeft:"1px solid rgba(191,219,254,.55)",borderRight:"1px solid rgba(191,219,254,.55)",borderRadius:"24px 24px 0 0",backdropFilter:"blur(16px)",zIndex:40,boxShadow:"0 -18px 42px rgba(8,21,58,.12)"},
-  navBtn:{border:"0",background:"transparent",borderRadius:22,padding:"10px 3px",fontWeight:850,color:"#334155",fontSize:13,display:"grid",gap:5,placeItems:"center",position:"relative",minHeight:74},
-  navActive:{border:"1px solid #dbeafe",background:"linear-gradient(180deg,#ffffff,#eff6ff)",borderRadius:24,padding:"10px 3px",fontWeight:950,color:"#0f62fe",fontSize:13,display:"grid",gap:5,placeItems:"center",position:"relative",boxShadow:"0 14px 30px rgba(8,21,58,.18)",minHeight:78,borderBottom:"4px solid #0f62fe"},
+  navBtn:{border:"0",background:"transparent",borderRadius:18,padding:0,fontWeight:850,color:"#334155",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",minHeight:72,overflow:"visible",boxShadow:"none",aspectRatio:"1/1"},
+  navActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:18,padding:0,fontWeight:950,color:"#0f62fe",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",boxShadow:"0 14px 30px rgba(8,21,58,.16)",minHeight:76,overflow:"visible",aspectRatio:"1/1"},
   navIcon:{lineHeight:1,display:"grid",placeItems:"center",color:"currentColor"},
   primaryBtn:{border:0,background:"linear-gradient(135deg,#0f62fe 0%,#19b7ff 45%,#2dd4bf 100%)",color:"#fff",borderRadius:18,padding:"13px 18px",fontWeight:950,boxShadow:"0 14px 28px rgba(15,98,254,.25)",minHeight:48},
   secondaryBtn:{border:"1px solid #bfdbfe",background:"#fff",color:"#071746",borderRadius:18,padding:"12px 15px",fontWeight:900,minHeight:46},
@@ -1634,8 +1685,8 @@ const S = {
   subTabs:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
   ownerSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
   petSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
-  subTab:{border:"1px solid #dbeafe",background:"#fff",borderRadius:20,padding:"12px 7px",fontWeight:850,whiteSpace:"normal",display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",minWidth:0,color:"#334155",minHeight:88,textAlign:"center",overflow:"hidden"},
-  subTabActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#fff,#eff6ff)",borderRadius:20,padding:"12px 7px",fontWeight:950,color:"#0f62fe",whiteSpace:"normal",display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",minWidth:0,minHeight:88,textAlign:"center",boxShadow:"0 10px 22px rgba(15,98,254,.14)",borderBottom:"4px solid #0f62fe",overflow:"hidden"},
+  subTab:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:850,whiteSpace:"normal",display:"grid",placeItems:"stretch",minWidth:0,color:"#334155",minHeight:0,aspectRatio:"1/1",textAlign:"center",overflow:"visible",position:"relative",boxShadow:"none"},
+  subTabActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:22,padding:0,fontWeight:950,color:"#0f62fe",whiteSpace:"normal",display:"grid",placeItems:"stretch",minWidth:0,minHeight:0,aspectRatio:"1/1",textAlign:"center",boxShadow:"0 14px 30px rgba(15,98,254,.16)",overflow:"visible",position:"relative"},
   subTabIcon:{lineHeight:1,display:"grid",placeItems:"center",color:"currentColor"},
   detailBox:{border:"1px solid #dbeafe",borderRadius:24,padding:14,background:"#fff",display:"grid",gap:12,boxShadow:"0 12px 30px rgba(8,21,58,.055)"},
   infoGrid:{display:"grid",gridTemplateColumns:"1fr",gap:9},
@@ -1683,11 +1734,11 @@ const S = {
   status:{fontSize:12,fontWeight:950,color:"#64748b"},
   officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10},
   officeIcon:{display:"grid",placeItems:"center",color:"currentColor"},
-  officeBtn:{border:"1px solid #dbeafe",background:"#fff",borderRadius:22,padding:"15px 10px",fontWeight:900,display:"grid",gridTemplateRows:"40px auto",gap:6,placeItems:"center",color:"#334155",minHeight:106},
-  officeActive:{border:"1px solid #0f62fe",background:"#eff6ff",borderRadius:22,padding:"15px 10px",fontWeight:950,color:"#0f62fe",display:"grid",gridTemplateRows:"40px auto",gap:6,placeItems:"center",borderBottom:"5px solid #0f62fe",minHeight:106,boxShadow:"0 10px 24px rgba(15,98,254,.14)"},
+  officeBtn:{border:"0",background:"transparent",borderRadius:28,padding:0,fontWeight:900,display:"grid",placeItems:"stretch",color:"#334155",minHeight:0,aspectRatio:"1/1",boxShadow:"none",position:"relative",overflow:"visible"},
+  officeActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:28,padding:0,fontWeight:950,color:"#0f62fe",display:"grid",placeItems:"stretch",minHeight:0,aspectRatio:"1/1",boxShadow:"0 18px 38px rgba(15,98,254,.16)",position:"relative",overflow:"visible"},
   scheduleFilters:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"0 0 12px"},
-  scheduleFilter:{border:"1px solid #dbeafe",background:"#fff",borderRadius:20,padding:"12px 6px",fontWeight:900,display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",color:"#334155",minHeight:88},
-  scheduleFilterActive:{border:"1px solid #0f62fe",background:"linear-gradient(180deg,#fff,#eff6ff)",borderRadius:20,padding:"12px 6px",fontWeight:950,display:"grid",gridTemplateRows:"34px auto",gap:5,placeItems:"center",color:"#0f62fe",minHeight:88,borderBottom:"4px solid #0f62fe",boxShadow:"0 10px 22px rgba(15,98,254,.14)"},
+  scheduleFilter:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:900,display:"grid",placeItems:"stretch",color:"#334155",minHeight:0,aspectRatio:"1/1",position:"relative",overflow:"visible",boxShadow:"none"},
+  scheduleFilterActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:22,padding:0,fontWeight:950,display:"grid",placeItems:"stretch",color:"#0f62fe",minHeight:0,aspectRatio:"1/1",boxShadow:"0 14px 30px rgba(15,98,254,.16)",position:"relative",overflow:"visible"},
   reportRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,alignItems:"center",borderBottom:"1px solid #eff6ff",padding:"11px 0"},
   billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
   billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
@@ -1710,4 +1761,11 @@ const S = {
   docPaper:{background:"#fff",color:"#111827",fontFamily:"system-ui,Segoe UI,sans-serif"},
   docHeader:{display:"flex",justifyContent:"space-between",gap:20,borderBottom:"2px solid #111827",paddingBottom:16,marginBottom:16},
   docSection:{marginTop:16},
+  iconTileFill:{position:"absolute",inset:0,borderRadius:"inherit",overflow:"hidden",background:"transparent",display:"block",boxShadow:"0 10px 22px rgba(8,21,58,.12)"},
+  iconTileImage:{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",display:"block",transformOrigin:"center"},
+  iconTileShine:{position:"absolute",inset:0,background:"transparent",pointerEvents:"none"},
+  iconTileScrim:{position:"absolute",left:0,right:0,bottom:0,height:"42%",borderRadius:"0 0 inherit inherit",background:"linear-gradient(180deg,rgba(8,21,58,0),rgba(8,21,58,.42))",pointerEvents:"none"},
+  iconTileLabel:{position:"relative",zIndex:2,alignSelf:"end",justifySelf:"center",textAlign:"center",color:"#fff",fontWeight:950,fontSize:16,lineHeight:1.06,textShadow:"0 2px 8px rgba(8,21,58,.72)",padding:"0 8px 14px",letterSpacing:".1px"},
+  navTileLabel:{fontSize:11,padding:"0 4px 9px",lineHeight:1.05},
+  officeTileLabel:{fontSize:18,padding:"0 8px 14px"},
 };
