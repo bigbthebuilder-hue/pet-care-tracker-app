@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 
-const VERSION = "PET_CARE_V27_CALENDAR_MILEAGE_NAV";
+const VERSION = "PET_CARE_V32_BUSINESS_DOCUMENT_SETTINGS";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
@@ -126,6 +128,29 @@ function addMinutes(time, minutes) {
 }
 function money(n) { return `$${Number(n || 0).toFixed(2)}`; }
 function num(n) { const x = Number(n || 0); return Number.isFinite(x) ? x : 0; }
+function visitBaseCharge(v) { return num(v?.base_price) + num(v?.extra_pet_fees) + num(v?.add_on_fees); }
+function visitMileageCharge(v) { return num(v?.travel_fee); }
+function visitTaxCharge(v) { return num(v?.gst_amount); }
+function visitChargeTotal(v) {
+  const componentTotal = visitBaseCharge(v) + visitMileageCharge(v) + visitTaxCharge(v);
+  return Math.max(num(v?.total_amount), componentTotal);
+}
+function visitChargeBreakdown(v) {
+  const base = visitBaseCharge(v);
+  const mileage = visitMileageCharge(v);
+  const tax = visitTaxCharge(v);
+  const total = visitChargeTotal(v);
+  return { base, mileage, tax, total };
+}
+function visitMoneyDetails(v) {
+  const parts = [];
+  const b = visitChargeBreakdown(v);
+  if (b.base) parts.push(`Service ${money(b.base)}`);
+  if (b.mileage) parts.push(`Mileage ${money(b.mileage)}${num(v?.mileage) ? ` (${num(v.mileage)} km)` : ""}`);
+  if (b.tax) parts.push(`GST ${money(b.tax)}`);
+  parts.push(`Total ${money(b.total)}`);
+  return parts.join(" · ");
+}
 function niceDate(iso) { if (!iso) return ""; const [y,m,d] = iso.split("-"); return `${m}/${d}/${y}`; }
 function timeLabel(value) {
   if (!value) return "";
@@ -539,7 +564,20 @@ export default function App() {
   async function completeVisit(id, patch) {
     const v = visits.find(x => x.id === id);
     const actualEnd = nowIso();
-    const final = { ...patch, status: "Completed", actual_end_time: actualEnd, completed_at: actualEnd };
+    const chargeMileage = !!patch.mileage_chargeable;
+    const travelFee = chargeMileage ? num(patch.travel_fee) : 0;
+    const base = num(v?.base_price) + num(v?.extra_pet_fees) + num(v?.add_on_fees);
+    const gst = settings?.charge_gst ? (base + travelFee) * num(settings.gst_rate) / 100 : num(v?.gst_amount);
+    const finalTotal = base + travelFee + gst;
+    const final = {
+      ...patch,
+      travel_fee: travelFee,
+      gst_amount: gst,
+      total_amount: finalTotal,
+      status: "Completed",
+      actual_end_time: actualEnd,
+      completed_at: actualEnd,
+    };
     if (final.is_paid && !final.paid_at) final.paid_at = actualEnd;
     if (!final.is_paid) { final.paid_at = null; final.payment_method = ""; final.payment_notes = ""; }
     await saveVisitPatch(id, final, "Visit completed");
@@ -569,7 +607,7 @@ export default function App() {
     {error && <div style={S.error}>{error}</div>}
     {toast && <div style={S.toast} onAnimationEnd={() => setToast("")}>{toast}</div>}
     {loading ? <div style={S.card}>Loading pet care data...</div> : <main key={`${tab}-${officeTab}`} style={S.main} className="page-transition">
-      {tab === "Today" && <TodayPage visits={todayVisits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
+      {tab === "Today" && <TodayPage visits={todayVisits} allVisits={visits} activeVisits={activeVisits} overdueVisits={overdueVisits} owners={ownerMap} pets={petMap} services={serviceMap} visitPets={visitPets} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onCancel={markCancelled} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Schedule" && <SchedulePage scheduleSeed={scheduleSeed} owners={owners} pets={pets} services={services} options={options} visits={visits} visitPets={visitPets} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onAdd={addVisitFromForm} onUpdate={updateVisitFromForm} onRepeatLast={repeatLastVisit} onRepeatVisit={repeatVisitTemplate} onStart={startVisit} onComplete={setCompleteVisitId} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
       {tab === "Owners" && <OwnersPage owners={owners} pets={pets} services={services} options={options} petChecklist={petChecklist} visits={visits} visitPets={visitPets} selectedOwnerId={selectedOwnerId} selectedPetId={selectedPetId} setSelectedOwnerId={setSelectedOwnerId} setSelectedPetId={setSelectedPetId} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveOwner={(o)=>saveRow("pet_owners", o, "Owner saved")} onSavePet={(p)=>saveRow("pet_pets", p, "Pet saved")} onSaveOption={(o)=>saveRow("pet_saved_service_options", o, "Saved service option saved")} onAddPetChecklist={(row)=>saveRow("pet_pet_checklist_items", row, "Pet checklist saved")} onDeleteOwner={(o)=>requestDelete("pet_owners", o, "owner", o.name)} onDeletePet={(p)=>requestDelete("pet_pets", p, "pet", p.name)} onDeleteOption={(o)=>requestDelete("pet_saved_service_options", o, "saved_service_option", o.option_name)} vetClinics={vetClinics} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onPetInfo={setPetInfoId} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} ownerDocuments={ownerDocuments} onUploadDocument={uploadOwnerDocument} onDeleteDocument={(d)=>requestDelete("pet_client_documents", d, "client_document", d.file_name || d.document_type)} settings={settings} onScheduleVisit={scheduleVisitForOwner} />}
       {tab === "Office" && <OfficePage officeTab={officeTab} setOfficeTab={setOfficeTab} owners={owners} pets={pets} services={services} serviceChecklist={serviceChecklist} visits={visits} visitPets={visitPets} travel={travel} vetClinics={vetClinics} settings={settings} deleted={deleted} ownerMap={ownerMap} petMap={petMap} serviceMap={serviceMap} onSaveService={(s)=>saveRow("pet_services", s, "Service saved")} onSaveServiceWithChecklist={saveServiceWithChecklist} onAddServiceChecklist={(row)=>saveRow("pet_service_checklist_items", row, "Checklist item saved")} onDeleteServiceChecklist={(item)=>requestDelete("pet_service_checklist_items", item, "service_checklist_item", item.label)} onDeleteService={(s)=>requestDelete("pet_services", s, "service", s.name)} onSaveSettings={(s)=>saveRow("pet_business_settings", s, "Settings saved")} onSaveVetClinic={(v)=>saveRow("pet_vet_clinics", v, "Vet clinic saved")} onDeleteVetClinic={(v)=>requestDelete("pet_vet_clinics", v, "vet_clinic", v.clinic_name)} onSaveTravel={(t)=>saveRow("pet_travel", t, "Travel saved")} onDeleteTravel={(t)=>requestDelete("pet_travel", t, "travel", `${niceDate(t.travel_date)} ${t.mileage || 0} km`)} onHardDeleteDeleted={hardDeleteDeleted} onMarkPaid={markVisitPaid} onMarkUnpaid={markVisitUnpaid} onMarkManyPaid={markManyVisitsPaid} onDeleteVisit={(v)=>requestDelete("pet_visits", v, "visit", `${niceDate(v.visit_date)} ${serviceMap[v.service_id]?.name || "visit"}`)} />}
@@ -585,19 +623,26 @@ export default function App() {
   </div>;
 }
 
-function TodayPage({ visits, activeVisits, overdueVisits, owners, pets, services, visitPets, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
-  const todayRevenue = visits.filter(v=>v.status === "Completed").reduce((s,v)=>s+num(v.total_amount),0);
+function TodayPage({ visits, allVisits = [], activeVisits, overdueVisits, owners, pets, services, visitPets, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
+  const today = todayISO();
+  const todayRevenue = visits.filter(v=>v.status === "Completed").reduce((s,v)=>s+visitChargeTotal(v),0);
+  const todayRemaining = visits.filter(v=>v.status === "Scheduled").sort(visitSort);
+  const nextVisit = allVisits.filter(v=>v.status === "Scheduled" && (v.visit_date || "") >= today).sort(visitSort)[0];
+  const recentlyCompleted = allVisits.filter(v=>v.status === "Completed").sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0,4);
+  const cardProps = { owners, pets, services, visitPets, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit };
+  const renderVisit = (v) => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />;
   return <section style={S.stack}>
     <div style={S.compactHeaderStats}>
-      <span><b>{visits.length}</b> visits</span>
+      <span><b>{visits.length}</b> today</span>
       <span>·</span>
       <span><b>{activeVisits.length}</b> active</span>
       <span>·</span>
-      <span><b>{money(todayRevenue)}</b> today</span>
+      <span><b>{money(todayRevenue)}</b> completed</span>
     </div>
-    {activeVisits.length > 0 && <Panel title="In Progress Now">{activeVisits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />)}</Panel>}
-    {overdueVisits.length > 0 && <Panel title="Overdue Scheduled Services">{overdueVisits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />)}</Panel>}
-    <Panel title="Today’s Schedule">{visits.length ? visits.map(v => <VisitCard key={v.id} visit={v} owner={owners[v.owner_id]} service={services[v.service_id]} pets={visitPetsFor(v, visitPets, pets)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onCancel={onCancel} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No services scheduled for today." />}</Panel>
+    {activeVisits.length > 0 ? <Panel title="In Progress Now">{activeVisits.map(renderVisit)}</Panel> : nextVisit ? <Panel title="Next Visit">{renderVisit(nextVisit)}</Panel> : null}
+    {todayRemaining.length > 0 && <Panel title="Today’s Remaining Visits">{todayRemaining.map(renderVisit)}</Panel>}
+    {overdueVisits.length > 0 && <Panel title="Overdue / Needs Attention">{overdueVisits.map(renderVisit)}</Panel>}
+    <Panel title="Recently Completed">{recentlyCompleted.length ? recentlyCompleted.map(renderVisit) : <Empty text="No recently completed visits yet." />}</Panel>
   </section>;
 }
 function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, visitPets, ownerMap, petMap, serviceMap, onAdd, onUpdate, onRepeatLast, onRepeatVisit, onStart, onComplete, onPetInfo, onMarkPaid, onMarkUnpaid, onDeleteVisit }) {
@@ -605,6 +650,7 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
   const [petIds, setPetIds] = useState([]);
   const [editingVisitId, setEditingVisitId] = useState("");
   const [showAdvancedVisitDetails, setShowAdvancedVisitDetails] = useState(false);
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
   const [scheduleFilter, setScheduleFilter] = useState("Calendar");
   const [selectedDate, setSelectedDate] = useState(todayISO());
@@ -639,6 +685,7 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
     setEditingVisitId("");
     setScheduleFilter("Calendar");
     setShowAdvancedVisitDetails(false);
+    setShowScheduleForm(true);
     scrollToScheduleForm();
   }, [scheduleSeed?.stamp]);
   function togglePet(id) {
@@ -672,6 +719,7 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
     setMonthKey(monthKeyFromIso(v.visit_date || todayISO()));
     setScheduleFilter("Calendar");
     setShowAdvancedVisitDetails(true);
+    setShowScheduleForm(true);
     scrollToScheduleForm();
   }
   async function saveVisit() {
@@ -681,6 +729,7 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
       setEditingVisitId("");
       setForm(blankVisit);
       setPetIds([]);
+      setShowScheduleForm(false);
       if (saved?.visit_date) pickCalendarDate(saved.visit_date);
       setScheduleFilter("Calendar");
       scrollToVisits();
@@ -688,13 +737,22 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
       const saved = await onAdd(form, petIds);
       if (saved?.id) setHighlightVisitId(saved.id);
       const savedDate = saved?.visit_date || form.visit_date || selectedDate || todayISO();
+      setShowScheduleForm(false);
       pickCalendarDate(savedDate);
       setScheduleFilter("Calendar");
       scrollToVisits();
     }
   }
   return <section style={S.stack}>
-    <div id="schedule-form-panel"><Panel title={editingVisitId ? "Reschedule Visit" : "Add Scheduled Visit"}>
+    <Panel title="Schedule">
+      <ScheduleCalendar monthKey={monthKey} selectedDate={selectedDate} visits={visits} serviceMap={serviceMap} onSelectDate={pickCalendarDate} onPrev={()=>setMonthKey(shiftMonthKey(monthKey,-1))} onNext={()=>setMonthKey(shiftMonthKey(monthKey,1))} onToday={()=>pickCalendarDate(todayISO())} />
+      <div style={S.row}>
+        <button style={S.primaryBtn} onClick={()=>{ setShowScheduleForm(true); setEditingVisitId(""); setForm(f=>({...f, visit_date:selectedDate || todayISO()})); requestAnimationFrame(scrollToScheduleForm); }}>+ Schedule Visit</button>
+        {editingVisitId && <button style={S.secondaryBtn} onClick={()=>setShowScheduleForm(true)}>Continue Editing</button>}
+      </div>
+    </Panel>
+
+    {showScheduleForm && <div id="schedule-form-panel"><Panel title={editingVisitId ? "Reschedule Visit" : "Add Scheduled Visit"}>
       <div style={S.formGrid}>
         <Field label="Owner"><select value={form.owner_id} onChange={e=>pickOwner(e.target.value)}><option value="">Select owner</option>{owners.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         <Field label="Service"><select value={form.service_id || ""} onChange={e=>applyService(e.target.value)}><option value="">Select service</option>{services.filter(s=>s.is_active).map(s=><option key={s.id} value={s.id}>{s.name} — {money(s.base_price)}</option>)}</select></Field>
@@ -716,7 +774,7 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
       </details>
       <div style={S.row}>
         <button style={S.primaryBtn} onClick={saveVisit} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
-        {editingVisitId && <button style={S.secondaryBtn} onClick={()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel Edit</button>}
+        <button style={S.secondaryBtn} onClick={()=>{ setShowScheduleForm(false); setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel</button>
       </div>
       {form.owner_id && <div style={S.detailBox}>
         <b>Recent visits for this owner</b>
@@ -727,10 +785,10 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
           <button style={S.secondaryMini} onClick={()=>onRepeatVisit(v.id)}>Use as Template</button>
         </div>) : <Empty text="No recent visits for this owner yet." />}
       </div>}
-    </Panel></div>
-    <div id="schedule-visits-panel"><Panel title="Visits">
-      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>{setScheduleFilter(f); scrollToVisits();}}><IconTileCard src={f === "Active" ? ICON_IMAGES.scheduleActive : f === "Completed" ? ICON_IMAGES.scheduleCompleted : ICON_IMAGES.scheduleUpcoming} label={f} zoom={1} /></button>)}</div>
-      {scheduleFilter === "Calendar" && <ScheduleCalendar monthKey={monthKey} selectedDate={selectedDate} visits={visits} serviceMap={serviceMap} onSelectDate={pickCalendarDate} onPrev={()=>setMonthKey(shiftMonthKey(monthKey,-1))} onNext={()=>setMonthKey(shiftMonthKey(monthKey,1))} onToday={()=>pickCalendarDate(todayISO())} />}
+    </Panel></div>}
+
+    <div id="schedule-visits-panel"><Panel title={scheduleFilter === "Calendar" ? `Selected Day — ${niceDate(selectedDate)}` : "Visits"}>
+      <div style={S.filterPills}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.filterPillActive : S.filterPill} onClick={()=>{setScheduleFilter(f); scrollToVisits();}}>{f}</button>)}</div>
       {scheduleFilter !== "Completed" && (visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} highlight={highlightVisitId===v.id} />) : <Empty text={scheduleFilter === "Active" ? "No visits in progress." : scheduleFilter === "Calendar" ? `No visits on ${niceDate(selectedDate)}.` : "No upcoming visits yet."} />)}
       {scheduleFilter === "Completed" && <div style={S.stack}>{completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 6).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} highlight={highlightVisitId===v.id} />) : <Empty text="No completed visits yet." />}{completedVisits.length > 6 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}</div>}
     </Panel></div>
@@ -848,12 +906,12 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
         </div>}
 
         {ownerTab === "Visits" && <div style={S.stack}>
-          <div style={S.grid3}><Metric title="Upcoming" value={ownerVisits.filter(v=>["Scheduled","In Progress"].includes(v.status)).length} sub="scheduled/active" /><Metric title="Completed" value={ownerVisits.filter(v=>v.status==="Completed").length} sub="visit history" /><Metric title="Unpaid" value={money(ownerVisits.filter(v=>v.status==="Completed"&&!v.is_paid).reduce((s,v)=>s+num(v.total_amount),0))} sub="completed visits" /></div>
+          <div style={S.grid3}><Metric title="Upcoming" value={ownerVisits.filter(v=>["Scheduled","In Progress"].includes(v.status)).length} sub="scheduled/active" /><Metric title="Completed" value={ownerVisits.filter(v=>v.status==="Completed").length} sub="visit history" /><Metric title="Unpaid" value={money(ownerVisits.filter(v=>v.status==="Completed"&&!v.is_paid).reduce((s,v)=>s+visitChargeTotal(v),0))} sub="completed visits" /></div>
           {ownerVisits.length ? ownerVisits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onDeleteVisit={onDeleteVisit} />) : <Empty text="No visits yet for this owner." />}
         </div>}
 
         {ownerTab === "Billing" && <div style={S.stack}>
-          <OwnerBillingSummary owner={selectedOwner} visits={ownerVisits} visitPets={visitPets} petMap={petMap} serviceMap={serviceMap} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onMarkManyPaid={onMarkManyPaid} />
+          <OwnerBillingSummary owner={selectedOwner} visits={ownerVisits} visitPets={visitPets} petMap={petMap} serviceMap={serviceMap} settings={settings} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onMarkManyPaid={onMarkManyPaid} />
         </div>}
       </Panel>}
     </div>
@@ -909,6 +967,7 @@ function petReportText(preview) {
   lines.push("");
   lines.push(`Completed visits: ${preview.totals.completedCount}`);
   lines.push(`Revenue: ${money(preview.totals.revenue)}`);
+  lines.push(`Mileage charged: ${money(preview.totals.mileageRevenue || 0)}`);
   lines.push(`Paid: ${money(preview.totals.paid)}`);
   lines.push(`Unpaid: ${money(preview.totals.unpaid)}`);
   lines.push(`Cancelled/Missed: ${preview.totals.cancelledMissed}`);
@@ -924,29 +983,55 @@ function petReportText(preview) {
   preview.serviceRows.forEach(r => lines.push(`- ${r.name}: ${r.count} visits, ${money(r.total)}`));
   lines.push("");
   lines.push("Visit details");
-  preview.rows.forEach(v => lines.push(`${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} | ${preview.ownerMap[v.owner_id]?.name || "Unknown"} | ${preview.serviceMap[v.service_id]?.name || "Service"} | ${visitPetsForNames(v, preview.visitPets, preview.petMap)} | ${money(v.total_amount)} | ${v.is_paid ? "Paid" : "Unpaid"}`));
+  preview.rows.forEach(v => lines.push(`${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} | ${preview.ownerMap[v.owner_id]?.name || "Unknown"} | ${preview.serviceMap[v.service_id]?.name || "Service"} | ${visitPetsForNames(v, preview.visitPets, preview.petMap)} | ${visitMoneyDetails(v)} | ${v.is_paid ? "Paid" : "Unpaid"}`));
   return lines.join("\n");
 }
-function PrintPreviewOverlay({ title, onClose, onEmail, children }) {
-  return <div className="print-preview-screen" style={S.printOverlay}>
-    <style>{`@media print{body *{visibility:hidden!important}.print-preview-screen,.print-preview-screen *{visibility:visible!important}.print-preview-screen{position:absolute!important;inset:0!important;background:white!important;overflow:visible!important;padding:0!important}.print-preview-toolbar{display:none!important}.print-preview-paper{box-shadow:none!important;border:none!important;margin:0!important;max-width:none!important;width:100%!important}}`}</style>
+function PrintPreviewOverlay({ title, onClose, children }) {
+  const paperRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const filename = `${safeFileName(title || "pet-care-report")}.pdf`;
+  async function handleDownload() {
+    try { setBusy(true); downloadBlob(await makePdfBlobFromElement(paperRef.current, filename), filename); }
+    catch (err) { console.error(err); window.alert("PDF could not be created. Try again after closing other apps/tabs."); }
+    finally { setBusy(false); }
+  }
+  async function handleShare() {
+    try { setBusy(true); await sharePdfBlob(await makePdfBlobFromElement(paperRef.current, filename), filename, title); }
+    catch (err) { console.error(err); window.alert("PDF could not be shared. It may have been downloaded instead."); }
+    finally { setBusy(false); }
+  }
+  return <div className="print-preview-screen v30-print-root" style={S.printOverlay}>
+    <style>{`${docStyles()} .v30-print-paper{background:#fff;width:816px;max-width:calc(100vw - 28px);margin:0 auto;padding:36px;border:1px solid #dbeafe;border-radius:18px;box-shadow:0 20px 60px rgba(15,98,254,.10)}`}</style>
     <div className="print-preview-toolbar" style={S.printToolbar}>
       <b>{title}</b>
-      <div style={S.row}>{onEmail && <button style={S.primaryBtn} onClick={onEmail}>Email Report</button>}<button style={S.primaryBtn} onClick={()=>window.print()}>Print / Save PDF</button><button style={S.secondaryBtn} onClick={onClose}>Close Preview</button></div>
+      <div style={S.row}><button style={S.primaryBtn} disabled={busy} onClick={handleDownload}>Download PDF</button><button style={S.secondaryBtn} disabled={busy} onClick={handleShare}>Share PDF</button><button style={S.secondaryBtn} disabled={busy} onClick={onClose}>Close Preview</button></div>
     </div>
-    <div className="print-preview-paper" style={S.printPaper}>{children}</div>
+    <div ref={paperRef} className="v30-print-paper"><div className="v30-doc">{children}</div></div>
   </div>;
 }
 function PetReportDocument({ preview, settings }) {
-  return <div style={S.docPaper}>
-    <div style={S.docHeader}>
-      <div><h1>{settings?.business_name || "Pet Care by Kiri"}</h1><div>{settings?.business_phone || ""}</div><div>{settings?.business_email || ""}</div></div>
-      <div style={{textAlign:"right"}}><h2>REPORT</h2><div>{preview.scopeLabel}</div><div>{niceDate(preview.range.start.toISOString().slice(0,10))} to {niceDate(preview.range.end.toISOString().slice(0,10))}</div></div>
+  const serviceRevenue = preview.rows.reduce((s,v)=>s+visitBaseCharge(v),0);
+  const taxRevenue = preview.rows.reduce((s,v)=>s+visitTaxCharge(v),0);
+  return <div>
+    <div className="doc-head">
+      <div><h1>{businessName(settings)}</h1><div className="muted">{businessServiceLine(settings)}</div>{businessContactLines(settings).map(line => <div key={line.label} className="muted"><b>{line.label}:</b> {line.value}</div>)}</div>
+      <div className="doc-title"><h2>Report</h2><div>{preview.scopeLabel}</div><div>{niceDate(preview.range.start.toISOString().slice(0,10))} to {niceDate(preview.range.end.toISOString().slice(0,10))}</div><div className="muted small">Generated {new Date().toLocaleDateString()}</div></div>
     </div>
-    <div style={S.docSection}><h3>Summary</h3><div style={S.grid3}><Metric title="Completed" value={preview.totals.completedCount} sub="visits"/><Metric title="Revenue" value={money(preview.totals.revenue)} sub="completed"/><Metric title="Unpaid" value={money(preview.totals.unpaid)} sub={`${preview.totals.unpaidCount} visits`}/></div></div>
-    <div style={S.docSection}><h3>Owner Rankings</h3><p style={S.muted}>Sorted by {preview.rankLabel}</p>{preview.ownerRows.map((r,i)=><div key={r.owner.id} style={S.reportRow}><b>{i+1}. {r.owner.name}</b><span>{r.completedCount} visits</span><span>{money(r.total)}</span><small>Paid {money(r.paid)} · Unpaid {money(r.unpaid)} · Avg {money(r.avgVisit)}</small>{r.petRows.length ? <div style={S.subList}>{r.petRows.map(pr=><span key={pr.pet.id}>{pr.pet.name}: {pr.count}</span>)}</div> : null}</div>)}</div>
-    <div style={S.docSection}><h3>Service Totals</h3>{preview.serviceRows.map(r=><div key={r.name} style={S.reportRow}><b>{r.name}</b><span>{r.count} visits</span><span>{money(r.total)}</span></div>)}</div>
-    <div style={S.docSection}><h3>Visit Details</h3>{preview.rows.map(v=><div key={v.id} style={S.reportRow}><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><span>{preview.ownerMap[v.owner_id]?.name || "Unknown"}</span><span>{preview.serviceMap[v.service_id]?.name || "Service"}</span><small>{visitPetsForNames(v, preview.visitPets, preview.petMap)} · {money(v.total_amount)} · {v.is_paid ? "Paid" : "Unpaid"}</small></div>)}</div>
+    <h3>Summary</h3>
+    <div className="summary-grid">
+      <div className="summary-card">Completed<b>{preview.totals.completedCount}</b><span className="muted">visits</span></div>
+      <div className="summary-card">Revenue<b>{money(preview.totals.revenue)}</b><span className="muted">completed</span></div>
+      <div className="summary-card">Service<b>{money(serviceRevenue)}</b><span className="muted">before mileage/tax</span></div>
+      <div className="summary-card">Mileage<b>{money(preview.totals.mileageRevenue || 0)}</b><span className="muted">charged</span></div>
+      <div className="summary-card">GST/Tax<b>{money(taxRevenue)}</b><span className="muted">included</span></div>
+      <div className="summary-card">Paid<b>{money(preview.totals.paid)}</b><span className="muted">received</span></div>
+      <div className="summary-card">Unpaid<b>{money(preview.totals.unpaid)}</b><span className="muted">{preview.totals.unpaidCount} visits</span></div>
+      <div className="summary-card">Cancelled/Missed<b>{preview.totals.cancelledMissed}</b><span className="muted">records</span></div>
+    </div>
+    <div className="section"><h3>Owner Rankings</h3><table><thead><tr><th>#</th><th>Owner</th><th className="num">Visits</th><th className="num">Total</th><th className="num">Paid</th><th className="num">Unpaid</th><th className="num">Avg</th></tr></thead><tbody>{preview.ownerRows.map((r,i)=><tr key={r.owner.id}><td>{i+1}</td><td><b>{r.owner.name}</b>{r.petRows.length ? <div className="muted small">{r.petRows.map(pr=>`${pr.pet.name}: ${pr.count}`).join(" · ")}</div> : null}</td><td className="num">{r.completedCount}</td><td className="num">{money(r.total)}</td><td className="num">{money(r.paid)}</td><td className="num">{money(r.unpaid)}</td><td className="num">{money(r.avgVisit)}</td></tr>)}</tbody></table></div>
+    <div className="section"><h3>Service Totals</h3><table><thead><tr><th>Service</th><th className="num">Visits</th><th className="num">Total</th><th className="num">Unpaid</th></tr></thead><tbody>{preview.serviceRows.map(r=><tr key={r.name}><td><b>{r.name}</b></td><td className="num">{r.count}</td><td className="num">{money(r.total)}</td><td className="num">{money(r.unpaid || 0)}</td></tr>)}</tbody></table></div>
+    <div className="section"><h3>Visit Details</h3><table><thead><tr><th>Date</th><th>Owner</th><th>Service / Pets</th><th className="num">Service</th><th className="num">Mileage</th><th className="num">Tax</th><th className="num">Total</th><th>Status</th></tr></thead><tbody>{preview.rows.map(v=>{ const b=visitChargeBreakdown(v); return <tr key={v.id}><td>{niceDate(v.visit_date)}<br/><span className="muted small">{timeLabel(v.scheduled_start_time)}</span></td><td>{preview.ownerMap[v.owner_id]?.name || "Unknown"}</td><td><b>{preview.serviceMap[v.service_id]?.name || "Service"}</b><br/><span className="muted small">{visitPetsForNames(v, preview.visitPets, preview.petMap)}</span></td><td className="num">{money(b.base)}</td><td className="num">{b.mileage ? money(b.mileage) : "—"}</td><td className="num">{b.tax ? money(b.tax) : "—"}</td><td className="num"><b>{money(b.total)}</b></td><td>{v.is_paid ? "Paid" : "Unpaid"}</td></tr>;})}</tbody></table></div>
+    <div className="footer">{displayValue(settings?.invoice_footer_note) || displayValue(settings?.business_notes) || "Generated report values are based on completed visit records in the selected range."}{businessContactLines(settings).length ? <><br/>Contact: {businessContactLines(settings).filter(l => ["Phone", "Email"].includes(l.label)).map(l => l.value).join(" · ")}</> : null}</div>
   </div>;
 }
 function buildReportText({ title, owners = [], pets = [], visits = [], visitPets = [], ownerMap = {}, petMap = {}, serviceMap = {}, filter = null }) {
@@ -957,11 +1042,11 @@ function buildReportText({ title, owners = [], pets = [], visits = [], visitPets
   lines.push("");
   const grouped = owners.map(owner => ({ owner, rows: rows.filter(v => v.owner_id === owner.id) })).filter(x => x.rows.length);
   grouped.forEach(group => {
-    const total = group.rows.reduce((s, v) => s + num(v.total_amount), 0);
+    const total = group.rows.reduce((s, v) => s + visitChargeTotal(v), 0);
     lines.push(`${group.owner.name} — ${group.rows.length} visit(s) — ${money(total)}`);
     group.rows.forEach(v => {
       const petNames = visitPetsFor(v, visitPets, petMap).map(p => p.name).join(", ");
-      lines.push(`  ${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} — ${serviceMap[v.service_id]?.name || "Service"} — ${petNames} — ${money(v.total_amount)} — ${v.is_paid ? "Paid" : "Unpaid"}`);
+      lines.push(`  ${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} — ${serviceMap[v.service_id]?.name || "Service"} — ${petNames} — ${money(visitChargeTotal(v))} — ${v.is_paid ? "Paid" : "Unpaid"}`);
     });
     lines.push("");
   });
@@ -971,71 +1056,192 @@ function buildReportText({ title, owners = [], pets = [], visits = [], visitPets
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]));
 }
-function printHtmlDocument(title, bodyHtml) {
+function safeFileName(value = "pet-care-document") {
+  return String(value || "pet-care-document")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "pet-care-document";
+}
+function hasText(value) {
+  return String(value ?? "").trim().length > 0;
+}
+function displayValue(value) {
+  return String(value ?? "").trim();
+}
+function businessName(settings) {
+  return displayValue(settings?.business_name) || "Pet Care by Kiri";
+}
+function businessServiceLine(settings) {
+  return displayValue(settings?.service_description) || "Pet care services";
+}
+function businessContactLines(settings = {}) {
+  const lines = [];
+  if (hasText(settings.business_phone)) lines.push({ label: "Phone", value: displayValue(settings.business_phone) });
+  if (hasText(settings.business_email)) lines.push({ label: "Email", value: displayValue(settings.business_email) });
+  if (hasText(settings.business_website)) lines.push({ label: "Web", value: displayValue(settings.business_website) });
+  if (settings.show_business_address && hasText(settings.business_address)) lines.push({ label: "Address", value: displayValue(settings.business_address) });
+  if (settings.show_tax_number_on_documents && hasText(settings.tax_number)) lines.push({ label: "Tax #", value: displayValue(settings.tax_number) });
+  return lines;
+}
+function businessContactHtml(settings = {}) {
+  const lines = businessContactLines(settings).map(line => `<div class="muted"><strong>${escapeHtml(line.label)}:</strong> ${escapeHtml(line.value)}</div>`).join("");
+  return `<h1>${escapeHtml(businessName(settings))}</h1><div class="muted">${escapeHtml(businessServiceLine(settings))}</div>${lines}`;
+}
+function paymentInstructionLines(settings = {}) {
+  const lines = [];
+  if (hasText(settings.invoice_due_terms)) lines.push({ label: "Due terms", value: displayValue(settings.invoice_due_terms) });
+  if (hasText(settings.payment_methods)) lines.push({ label: "Accepted payment", value: displayValue(settings.payment_methods) });
+  if (settings.show_etransfer && hasText(settings.etransfer_email)) lines.push({ label: "E-transfer", value: displayValue(settings.etransfer_email) });
+  if (hasText(settings.default_invoice_note)) lines.push({ label: "Note", value: displayValue(settings.default_invoice_note) });
+  return lines;
+}
+function paymentInstructionsHtml(settings = {}, balanceDue = 0) {
+  const lines = paymentInstructionLines(settings);
+  if (!lines.length && !(num(balanceDue) > 0)) return "";
+  return `<div class="payment-box"><strong>Payment information</strong>${num(balanceDue) > 0 ? `<div><strong>Balance due:</strong> ${escapeHtml(money(balanceDue))}</div>` : ""}${lines.map(line => `<div><strong>${escapeHtml(line.label)}:</strong> ${escapeHtml(line.value)}</div>`).join("")}</div>`;
+}
+function documentFooterHtml(settings = {}, fallback = "Please contact us with any questions about this invoice or statement.") {
+  const parts = [];
+  if (hasText(settings.invoice_footer_note)) parts.push(displayValue(settings.invoice_footer_note));
+  else if (hasText(settings.business_notes)) parts.push(displayValue(settings.business_notes));
+  else parts.push(fallback);
+  const contactBits = [];
+  if (hasText(settings.business_phone)) contactBits.push(displayValue(settings.business_phone));
+  if (hasText(settings.business_email)) contactBits.push(displayValue(settings.business_email));
+  if (contactBits.length) parts.push(`Contact: ${contactBits.join(" · ")}`);
+  return `<div class="footer">${parts.map(escapeHtml).join("<br/>")}</div>`;
+}
+function docStyles() {
+  return `
+    .v30-doc { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #111827; line-height: 1.28; font-size: 11px; }
+    .v30-doc h1 { font-size: 28px; line-height: 1.05; margin: 0; letter-spacing: .01em; }
+    .v30-doc h2 { font-size: 18px; margin: 0; letter-spacing: .08em; text-transform: uppercase; }
+    .v30-doc h3 { font-size: 13px; margin: 15px 0 7px; letter-spacing: .02em; }
+    .v30-doc .doc-head { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #111827; padding-bottom: 14px; margin-bottom: 14px; }
+    .v30-doc .doc-title { text-align: right; min-width: 190px; }
+    .v30-doc .muted { color: #6b7280; }
+    .v30-doc .small { font-size: 10px; }
+    .v30-doc .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
+    .v30-doc .summary-card { border: 1px solid #dbeafe; border-radius: 10px; padding: 9px 10px; background: #f8fbff; min-height: 52px; }
+    .v30-doc .summary-card b { display: block; font-size: 15px; margin-top: 2px; }
+    .v30-doc .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+    .v30-doc .box { border: 1px solid #d1d5db; border-radius: 10px; padding: 10px 11px; min-height: 76px; }
+    .v30-doc .payment-box { border: 1px solid #bfdbfe; border-radius: 10px; padding: 10px 11px; background: #f8fbff; margin: 12px 0; }
+    .v30-doc .payment-box div { margin-top: 3px; }
+    .v30-doc table { width: 100%; border-collapse: collapse; margin-top: 8px; page-break-inside: auto; }
+    .v30-doc th { text-align: left; border-bottom: 2px solid #111827; padding: 6px 5px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+    .v30-doc td { border-bottom: 1px solid #e5e7eb; padding: 6px 5px; vertical-align: top; }
+    .v30-doc tr { break-inside: avoid; page-break-inside: avoid; }
+    .v30-doc .num { text-align: right; white-space: nowrap; }
+    .v30-doc .center { text-align: center; }
+    .v30-doc .total-row td { border-bottom: 0; font-size: 13px; font-weight: 850; padding-top: 10px; }
+    .v30-doc .totals { margin-left: auto; width: 280px; margin-top: 12px; }
+    .v30-doc .totals td { border-bottom: 0; padding: 3px 5px; }
+    .v30-doc .totals .grand td { border-top: 2px solid #111827; padding-top: 7px; font-size: 14px; font-weight: 900; }
+    .v30-doc .section { margin-top: 12px; }
+    .v30-doc .footer { margin-top: 20px; border-top: 1px solid #d1d5db; padding-top: 10px; color: #6b7280; font-size: 10px; }
+    .v30-doc .form-table td:first-child { width: 34%; background: #f3f4f6; font-weight: 700; }
+    .v30-doc .line-box { border: 1px solid #d1d5db; min-height: 42px; padding: 8px; margin: 5px 0 10px; }
+    .v30-doc .signature-grid { display: grid; grid-template-columns: 1.5fr .8fr 1.5fr .8fr; gap: 0; margin-top: 16px; border: 1px solid #111827; }
+    .v30-doc .signature-grid div { border-right: 1px solid #111827; min-height: 38px; padding: 4px; }
+    .v30-doc .signature-grid div:last-child { border-right: 0; }
+    @media (max-width: 720px) { .v30-doc .summary-grid { grid-template-columns: repeat(2, 1fr); } .v30-doc .two-col { grid-template-columns: 1fr; } }
+  `;
+}
+async function makePdfBlobFromElement(element, filename = "pet-care-document.pdf") {
+  const canvas = await html2canvas(element, {
+    scale: Math.min(2.4, Math.max(1.8, window.devicePixelRatio || 2)),
+    backgroundColor: "#ffffff",
+    useCORS: true,
+    logging: false,
+    windowWidth: element.scrollWidth,
+  });
+  const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "letter", compress: true });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margin = 36;
+  const contentW = pageW - margin * 2;
+  const contentH = pageH - margin * 2;
+  const slicePxH = Math.floor(canvas.width * (contentH / contentW));
+  let y = 0;
+  let page = 0;
+  while (y < canvas.height) {
+    const h = Math.min(slicePxH, canvas.height - y);
+    const pageCanvas = document.createElement("canvas");
+    pageCanvas.width = canvas.width;
+    pageCanvas.height = h;
+    const ctx = pageCanvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    ctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+    const imgData = pageCanvas.toDataURL("image/jpeg", 0.96);
+    if (page > 0) pdf.addPage();
+    const renderedH = h * (contentW / canvas.width);
+    pdf.addImage(imgData, "JPEG", margin, margin, contentW, renderedH, undefined, "FAST");
+    y += h;
+    page += 1;
+  }
+  return pdf.output("blob");
+}
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
+}
+async function sharePdfBlob(blob, filename, title) {
+  const file = new File([blob], filename, { type: "application/pdf" });
+  if (navigator.canShare?.({ files: [file] }) && navigator.share) {
+    await navigator.share({ files: [file], title: title || filename, text: title || filename });
+    return true;
+  }
+  downloadBlob(blob, filename);
+  window.alert("PDF sharing is not available in this browser, so the PDF was downloaded instead.");
+  return false;
+}
+function printHtmlDocument(title, bodyHtml, options = {}) {
   const safeTitle = escapeHtml(title || "Pet Care Document");
+  const filename = options.filename || `${safeFileName(title || "pet-care-document")}.pdf`;
   const root = document.createElement("div");
-  root.className = "v13-print-root";
+  root.className = "v30-print-root";
   root.innerHTML = `
-    <style id="v13-print-style">
-      @page { size: letter; margin: 0.55in; }
-      @media screen {
-        .v13-print-root { position: fixed; inset: 0; z-index: 99999; background: rgba(255,255,255,.98); overflow: auto; padding: 20px; }
-        .v13-print-toolbar { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 12px; align-items: center; background: white; border: 1px solid #eadfd6; border-radius: 16px; padding: 10px 12px; margin: 0 auto 12px; max-width: 820px; box-shadow: 0 12px 30px rgba(70,50,35,.12); font-family: system-ui, Segoe UI, sans-serif; }
-        .v13-print-toolbar button { border: 1px solid #d9c7b8; background: #fff; border-radius: 12px; padding: 10px 12px; font-weight: 800; }
-        .v13-print-toolbar .primary { background: #d9783f; border-color: #d9783f; color: #fff; }
-        .v13-print-paper { background: white; max-width: 820px; margin: 0 auto; padding: 34px; border: 1px solid #eadfd6; border-radius: 18px; box-shadow: 0 20px 60px rgba(70,50,35,.14); }
-      }
-      @media print {
-        body > *:not(.v13-print-root) { display: none !important; }
-        .v13-print-root { display: block !important; position: static !important; inset: auto !important; padding: 0 !important; background: white !important; }
-        .v13-print-toolbar { display: none !important; }
-        .v13-print-paper { display: block !important; box-shadow: none !important; border: 0 !important; border-radius: 0 !important; margin: 0 !important; padding: 0 !important; max-width: none !important; width: 100% !important; }
-      }
-      .v13-doc { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #171717; line-height: 1.35; font-size: 13px; }
-      .v13-doc h1 { font-size: 26px; margin: 0; }
-      .v13-doc h2 { font-size: 22px; margin: 0; letter-spacing: .04em; }
-      .v13-doc h3 { font-size: 15px; margin: 18px 0 8px; }
-      .v13-doc .doc-head { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #222; padding-bottom: 18px; margin-bottom: 18px; }
-      .v13-doc .muted { color: #666; }
-      .v13-doc .bill-to { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 16px 0; }
-      .v13-doc .box { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
-      .v13-doc table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-      .v13-doc th { text-align: left; border-bottom: 2px solid #222; padding: 8px 6px; font-size: 12px; }
-      .v13-doc td { border-bottom: 1px solid #e5e5e5; padding: 8px 6px; vertical-align: top; }
-      .v13-doc .num { text-align: right; white-space: nowrap; }
-      .v13-doc .total-row td { border-bottom: 0; font-size: 16px; font-weight: 850; padding-top: 14px; }
-      .v13-doc .footer { margin-top: 24px; border-top: 1px solid #ddd; padding-top: 12px; color: #666; font-size: 12px; }
-      @media print { .v13-doc { font-size: 12px; } .v13-doc .box { break-inside: avoid; } .v13-doc tr { break-inside: avoid; } }
+    <style id="v30-print-style">
+      .v30-print-root { position: fixed; inset: 0; z-index: 99999; background: rgba(255,255,255,.985); overflow: auto; padding: 14px; }
+      .v30-print-toolbar { position: sticky; top: 0; display: flex; justify-content: space-between; gap: 10px; align-items: center; background: white; border: 1px solid #dbeafe; border-radius: 16px; padding: 10px 12px; margin: 0 auto 12px; max-width: 850px; box-shadow: 0 12px 30px rgba(15,98,254,.12); font-family: system-ui, Segoe UI, sans-serif; }
+      .v30-print-toolbar button { border: 1px solid #bfdbfe; background: #fff; color:#08153a; border-radius: 999px; padding: 10px 13px; font-weight: 850; }
+      .v30-print-toolbar .primary { background: linear-gradient(135deg,#0f62fe,#23d3c6); border-color: transparent; color: #fff; }
+      .v30-print-paper { background: white; width: 816px; max-width: calc(100vw - 28px); margin: 0 auto; padding: 36px; border: 1px solid #dbeafe; border-radius: 18px; box-shadow: 0 20px 60px rgba(15,98,254,.10); }
+      ${docStyles()}
     </style>
-    <div class="v13-print-toolbar"><strong>${safeTitle}</strong><div><button class="primary" data-print>Print / Save PDF</button><button data-close>Close</button></div></div>
-    <div class="v13-print-paper"><div class="v13-doc">${bodyHtml || ""}</div></div>
+    <div class="v30-print-toolbar"><strong>${safeTitle}</strong><div><button class="primary" data-pdf>Download PDF</button><button data-share>Share PDF</button><button data-close>Close</button></div></div>
+    <div class="v30-print-paper"><div class="v30-doc">${bodyHtml || ""}</div></div>
   `;
   document.body.appendChild(root);
-  root.querySelector('[data-close]')?.addEventListener('click', () => root.remove());
-  root.querySelector('[data-print]')?.addEventListener('click', () => window.print());
-  setTimeout(() => {
-    try { window.print(); } catch (_) {}
-  }, 150);
-  setTimeout(() => {
-    if (root.parentNode) root.remove();
-  }, 12000);
+  const paper = root.querySelector(".v30-print-paper");
+  const setBusy = (busy) => root.querySelectorAll("button").forEach(b => b.disabled = !!busy);
+  root.querySelector("[data-close]")?.addEventListener("click", () => root.remove());
+  root.querySelector("[data-pdf]")?.addEventListener("click", async () => {
+    try { setBusy(true); downloadBlob(await makePdfBlobFromElement(paper, filename), filename); }
+    catch (err) { console.error(err); window.alert("PDF could not be created. Try again after closing other apps/tabs."); }
+    finally { setBusy(false); }
+  });
+  root.querySelector("[data-share]")?.addEventListener("click", async () => {
+    try { setBusy(true); await sharePdfBlob(await makePdfBlobFromElement(paper, filename), filename, title); }
+    catch (err) { console.error(err); window.alert("PDF could not be shared. It may have been downloaded instead."); }
+    finally { setBusy(false); }
+  });
 }
 function printTextDocument(title, text) {
   printHtmlDocument(title, `<h2>${escapeHtml(title || "Pet Care Document")}</h2><pre style="white-space:pre-wrap;font:inherit;margin-top:16px">${escapeHtml(text || "")}</pre>`);
 }
 function emailTextDocument(subject, text, to = "") {
-  const href = `mailto:${encodeURIComponent(to || "")}?subject=${encodeURIComponent(subject || "Pet Care")}&body=${encodeURIComponent(text || "")}`;
-  try {
-    const a = document.createElement("a");
-    a.href = href;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => a.remove(), 500);
-  } catch (err) {
-    try { navigator.clipboard?.writeText(text || ""); } catch (_) {}
-    window.alert("Email app did not open. The invoice/report text was copied if clipboard access was available.");
-  }
+  const bodyHtml = `<h2>${escapeHtml(subject || "Pet Care Document")}</h2><pre style="white-space:pre-wrap;font:inherit;margin-top:16px">${escapeHtml(text || "")}</pre>`;
+  printHtmlDocument(subject || "Pet Care Document", bodyHtml, { filename: `${safeFileName(subject || "pet-care-document")}.pdf` });
 }
 function singleVisitBillingText(owner, visit, visitPets, petMap, serviceMap, title = "Invoice") {
   const pets = visitPetsFor(visit, visitPets, petMap).map(p => p.name).join(", ");
@@ -1048,49 +1254,69 @@ function singleVisitBillingText(owner, visit, visitPets, petMap, serviceMap, tit
   lines.push(`${niceDate(visit.visit_date)} ${timeLabel(visit.scheduled_start_time)} — ${serviceMap[visit.service_id]?.name || "Service"}`);
   if (pets) lines.push(`Pet(s): ${pets}`);
   lines.push(`Duration: ${visit.duration_minutes || 0} minutes`);
-  lines.push(`Amount: ${money(visit.total_amount)}`);
+  const breakdown = visitChargeBreakdown(visit);
+  lines.push(`Service/add-ons: ${money(breakdown.base)}`);
+  if (breakdown.mileage) lines.push(`Mileage charge: ${money(breakdown.mileage)}${num(visit.mileage) ? ` (${num(visit.mileage)} km)` : ""}`);
+  if (breakdown.tax) lines.push(`GST: ${money(breakdown.tax)}`);
+  lines.push(`Amount: ${money(breakdown.total)}`);
   lines.push(`Status: ${visit.is_paid ? "Paid" : "Unpaid"}`);
   if (visit.payment_method) lines.push(`Payment method: ${visit.payment_method}`);
   if (visit.completion_notes) lines.push(`Notes: ${visit.completion_notes}`);
   lines.push("");
-  lines.push(`Total due: ${visit.is_paid ? money(0) : money(visit.total_amount)}`);
+  lines.push(`Total due: ${visit.is_paid ? money(0) : money(visitChargeTotal(visit))}`);
   return lines.join("\n");
 }
 function visitBillingRowsHtml(rows, visitPets, petMap, serviceMap) {
   return rows.map(v => {
     const pets = visitPetsFor(v, visitPets, petMap).map(p => p.name).join(", ");
     const service = serviceMap[v.service_id]?.name || "Service";
+    const b = visitChargeBreakdown(v);
     return `<tr>
-      <td>${escapeHtml(niceDate(v.visit_date))}<br/><span class="muted">${escapeHtml(timeLabel(v.scheduled_start_time))}</span></td>
-      <td><strong>${escapeHtml(service)}</strong>${pets ? `<br/><span class="muted">${escapeHtml(pets)}</span>` : ""}</td>
+      <td>${escapeHtml(niceDate(v.visit_date))}<br/><span class="muted small">${escapeHtml(timeLabel(v.scheduled_start_time))}</span></td>
+      <td><strong>${escapeHtml(service)}</strong>${pets ? `<br/><span class="muted small">${escapeHtml(pets)}</span>` : ""}${v.completion_notes ? `<br/><span class="muted small">${escapeHtml(v.completion_notes)}</span>` : ""}</td>
       <td class="num">${escapeHtml(String(v.duration_minutes || 0))} min</td>
       <td>${escapeHtml(v.is_paid ? "Paid" : "Unpaid")}</td>
-      <td class="num">${escapeHtml(money(v.total_amount))}</td>
+      <td class="num">${escapeHtml(money(b.base))}</td>
+      <td class="num">${b.mileage ? `${escapeHtml(money(b.mileage))}${num(v.mileage) ? `<br/><span class="muted small">${escapeHtml(String(num(v.mileage)))} km</span>` : ""}` : "—"}</td>
+      <td class="num">${b.tax ? escapeHtml(money(b.tax)) : "—"}</td>
+      <td class="num"><strong>${escapeHtml(money(b.total))}</strong></td>
     </tr>`;
   }).join("");
 }
-function billingDocumentHtml({ title, owner, rows, visitPets, petMap, serviceMap }) {
+function billingDocumentHtml({ title, owner, rows, visitPets, petMap, serviceMap, settings }) {
   const list = Array.isArray(rows) ? rows : [];
-  const subtotal = list.reduce((s, v) => s + num(v.total_amount), 0);
-  const unpaid = list.filter(v => !v.is_paid).reduce((s, v) => s + num(v.total_amount), 0);
+  const serviceSubtotal = list.reduce((s, v) => s + visitBaseCharge(v), 0);
+  const mileageSubtotal = list.reduce((s, v) => s + visitMileageCharge(v), 0);
+  const taxSubtotal = list.reduce((s, v) => s + visitTaxCharge(v), 0);
+  const subtotal = list.reduce((s, v) => s + visitChargeTotal(v), 0);
+  const unpaid = list.filter(v => !v.is_paid).reduce((s, v) => s + visitChargeTotal(v), 0);
   const paid = subtotal - unpaid;
   const docDate = new Date().toLocaleDateString();
+  const docType = title?.toLowerCase().includes("statement") ? "Statement" : "Invoice";
   return `<div>
     <div class="doc-head">
-      <div><h1>Pet Care by Kiri</h1><div class="muted">Pet care services</div></div>
-      <div style="text-align:right"><h2>${escapeHtml(title || "INVOICE")}</h2><div>Date: ${escapeHtml(docDate)}</div></div>
+      <div>${businessContactHtml(settings)}</div>
+      <div class="doc-title"><h2>${escapeHtml(docType)}</h2><div><strong>${escapeHtml(title || "Invoice")}</strong></div><div>Date: ${escapeHtml(docDate)}</div></div>
     </div>
-    <div class="bill-to">
+    <div class="two-col">
       <div class="box"><strong>Bill to</strong><br/>${escapeHtml(owner?.name || "Owner")}<br/>${owner?.address ? escapeHtml(owner.address) + "<br/>" : ""}${owner?.phone ? escapeHtml(owner.phone) + "<br/>" : ""}${owner?.invoice_email || owner?.email ? escapeHtml(owner.invoice_email || owner.email) : ""}</div>
-      <div class="box"><strong>Summary</strong><br/>Visits: ${list.length}<br/>Subtotal: ${escapeHtml(money(subtotal))}<br/>Paid: ${escapeHtml(money(paid))}<br/><strong>Total due: ${escapeHtml(money(unpaid))}</strong></div>
+      <div class="box"><strong>Summary</strong><br/>Visits: ${list.length}<br/>Service: ${escapeHtml(money(serviceSubtotal))}<br/>Mileage: ${escapeHtml(money(mileageSubtotal))}<br/>Tax/GST: ${escapeHtml(money(taxSubtotal))}<br/>Paid: ${escapeHtml(money(paid))}<br/><strong>Balance due: ${escapeHtml(money(unpaid))}</strong></div>
     </div>
     <h3>Services</h3>
-    <table><thead><tr><th>Date</th><th>Service / Pets</th><th class="num">Duration</th><th>Status</th><th class="num">Amount</th></tr></thead><tbody>${visitBillingRowsHtml(list, visitPets, petMap, serviceMap)}<tr class="total-row"><td colspan="4" class="num">Total due</td><td class="num">${escapeHtml(money(unpaid))}</td></tr></tbody></table>
-    <div class="footer">Generated from Pet Care by Kiri. Please contact us with any questions about this invoice or statement.</div>
+    <table><thead><tr><th>Date</th><th>Service / Pets</th><th class="num">Duration</th><th>Status</th><th class="num">Service</th><th class="num">Mileage</th><th class="num">Tax</th><th class="num">Total</th></tr></thead><tbody>${visitBillingRowsHtml(list, visitPets, petMap, serviceMap)}</tbody></table>
+    <table class="totals"><tbody>
+      <tr><td>Service subtotal</td><td class="num">${escapeHtml(money(serviceSubtotal))}</td></tr>
+      <tr><td>Mileage</td><td class="num">${escapeHtml(money(mileageSubtotal))}</td></tr>
+      <tr><td>GST / tax</td><td class="num">${escapeHtml(money(taxSubtotal))}</td></tr>
+      <tr><td>Paid</td><td class="num">${escapeHtml(money(paid))}</td></tr>
+      <tr class="grand"><td>Balance due</td><td class="num">${escapeHtml(money(unpaid))}</td></tr>
+    </tbody></table>
+    ${paymentInstructionsHtml(settings, unpaid)}
+    ${documentFooterHtml(settings)}
   </div>`;
 }
-function printBillingDocument(title, owner, rows, visitPets, petMap, serviceMap) {
-  printHtmlDocument(title, billingDocumentHtml({ title, owner, rows, visitPets, petMap, serviceMap }));
+function printBillingDocument(title, owner, rows, visitPets, petMap, serviceMap, settings) {
+  printHtmlDocument(title, billingDocumentHtml({ title, owner, rows, visitPets, petMap, serviceMap, settings }), { filename: `${safeFileName(title || "invoice")}.pdf` });
 }
 function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap, onMarkPaid, settings }) {
   const [scope, setScope] = useState("all");
@@ -1109,9 +1335,10 @@ function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap
   const cancelledMissed = rows.filter(v=>v.status === "Cancelled" || v.status === "Missed").length;
   const totals = {
     completedCount: completed.length,
-    revenue: completed.reduce((s,v)=>s+num(v.total_amount),0),
-    paid: paid.reduce((s,v)=>s+num(v.total_amount),0),
-    unpaid: unpaid.reduce((s,v)=>s+num(v.total_amount),0),
+    revenue: completed.reduce((s,v)=>s+visitChargeTotal(v),0),
+    mileageRevenue: completed.reduce((s,v)=>s+visitMileageCharge(v),0),
+    paid: paid.reduce((s,v)=>s+visitChargeTotal(v),0),
+    unpaid: unpaid.reduce((s,v)=>s+visitChargeTotal(v),0),
     unpaidCount: unpaid.length,
     cancelledMissed,
   };
@@ -1121,16 +1348,16 @@ function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap
     const unpaidRows = ownerVisits.filter(v=>!v.is_paid);
     const petRows = pets.filter(p=>p.owner_id===owner.id).map(p=>{
       const petVisits = ownerVisits.filter(v=>v.primary_pet_id===p.id || visitPets.some(vp=>vp.visit_id===v.id && vp.pet_id===p.id));
-      return { pet:p, count:petVisits.length, total:petVisits.reduce((s,v)=>s+num(v.total_amount),0) };
+      return { pet:p, count:petVisits.length, total:petVisits.reduce((s,v)=>s+visitChargeTotal(v),0) };
     }).filter(x=>x.count);
-    const total = ownerVisits.reduce((s,v)=>s+num(v.total_amount),0);
-    return { owner, completedCount: ownerVisits.length, total, paid: paidRows.reduce((s,v)=>s+num(v.total_amount),0), unpaid: unpaidRows.reduce((s,v)=>s+num(v.total_amount),0), unpaidCount: unpaidRows.length, avgVisit: ownerVisits.length ? total / ownerVisits.length : 0, petRows };
+    const total = ownerVisits.reduce((s,v)=>s+visitChargeTotal(v),0);
+    return { owner, completedCount: ownerVisits.length, total, paid: paidRows.reduce((s,v)=>s+visitChargeTotal(v),0), unpaid: unpaidRows.reduce((s,v)=>s+visitChargeTotal(v),0), unpaidCount: unpaidRows.length, avgVisit: ownerVisits.length ? total / ownerVisits.length : 0, petRows };
   }).filter(x=>x.completedCount || x.total || x.unpaid).sort((a,b)=>{
     const key = rankBy === "visits" ? "completedCount" : rankBy === "unpaid" ? "unpaid" : rankBy === "avg" ? "avgVisit" : "total";
     const diff = num(b[key])-num(a[key]);
     return diff || (a.owner.name || "").localeCompare(b.owner.name || "");
   });
-  const serviceRows = Object.values(completed.reduce((acc,v)=>{ const key=v.service_id || "custom"; acc[key] ||= { name: serviceMap[v.service_id]?.name || "Custom/Unknown", count:0, total:0, unpaid:0 }; acc[key].count++; acc[key].total+=num(v.total_amount); if(!v.is_paid) acc[key].unpaid+=num(v.total_amount); return acc; },{})).sort((a,b)=>b.total-a.total);
+  const serviceRows = Object.values(completed.reduce((acc,v)=>{ const key=v.service_id || "custom"; acc[key] ||= { name: serviceMap[v.service_id]?.name || "Custom/Unknown", count:0, total:0, unpaid:0 }; acc[key].count++; acc[key].total+=visitChargeTotal(v); if(!v.is_paid) acc[key].unpaid+=visitChargeTotal(v); return acc; },{})).sort((a,b)=>b.total-a.total);
   const rankLabels = { total:"Total $", visits:"Visit Count", unpaid:"Unpaid $", avg:"Average $ / Visit" };
   const reportData = { title:"Pet Care Report", scopeLabel: scope === "owner" ? selectedOwner?.name || "Selected Owner" : "All Pet Owners", range, rows, completed, unpaid, paid, totals, ownerRows, serviceRows, rankBy, rankLabel: rankLabels[rankBy], ownerMap, petMap, serviceMap, visitPets };
   const reportText = petReportText(reportData);
@@ -1144,16 +1371,16 @@ function Reports({ owners, pets, visits, visitPets, ownerMap, petMap, serviceMap
         {reportType === "month" && <Field label="Month"><select value={month} onChange={e=>setMonth(e.target.value)}>{Array.from({length:12},(_,i)=><option key={i+1} value={String(i+1)}>{i+1}</option>)}</select></Field>}
         <Field label="Year"><input type="number" value={year} onChange={e=>setYear(e.target.value)} /></Field>
       </div>
-      <div style={S.row}><button style={S.primaryBtn} onClick={()=>setPreview(reportData)}>Print / Save PDF</button><button style={S.secondaryBtn} onClick={emailReport}>Email Report</button></div>
+      <div style={S.row}><button style={S.primaryBtn} onClick={()=>setPreview(reportData)}>Download / Share Report PDF</button></div>
     </Panel>
     <Panel title="Report Preview" subtitle={`${reportData.scopeLabel} · ${niceDate(range.start.toISOString().slice(0,10))} to ${niceDate(range.end.toISOString().slice(0,10))}`}>
       <div style={S.grid3}><Metric title="Completed" value={totals.completedCount} sub="visits" /><Metric title="Revenue" value={money(totals.revenue)} sub="completed" /><Metric title="Unpaid" value={money(totals.unpaid)} sub={`${totals.unpaidCount} visits`} /></div>
-      <div style={S.grid3}><Metric title="Paid" value={money(totals.paid)} sub="received" /><Metric title="Avg / Visit" value={money(totals.completedCount ? totals.revenue/totals.completedCount : 0)} sub="completed" /><Metric title="Cancelled/Missed" value={totals.cancelledMissed} sub="visits" /></div>
+      <div style={S.grid3}><Metric title="Paid" value={money(totals.paid)} sub="received" /><Metric title="Mileage" value={money(totals.mileageRevenue)} sub="charged" /><Metric title="Avg / Visit" value={money(totals.completedCount ? totals.revenue/totals.completedCount : 0)} sub="completed" /><Metric title="Cancelled/Missed" value={totals.cancelledMissed} sub="visits" /></div>
     </Panel>
     <Panel title="Rank pet owners by"><div style={S.row}>{Object.entries(rankLabels).map(([k,label])=><button key={k} style={rankBy===k?S.primaryMini:S.secondaryMini} onClick={()=>setRankBy(k)}>{label}</button>)}</div><p style={S.muted}>Sorted by {rankLabels[rankBy]} high to low.</p></Panel>
     <Panel title="Pet Owner Rankings">{ownerRows.length ? ownerRows.map((x,idx)=><div key={x.owner.id} style={S.reportRow}><b>{idx+1}. {x.owner.name}</b><span>{x.completedCount} visits</span><span>{money(x.total)}</span><small>Paid {money(x.paid)} · Unpaid {money(x.unpaid)} · Avg {money(x.avgVisit)}</small><div style={S.subList}>{x.petRows.map(pr=><span key={pr.pet.id}>{pr.pet.name}: {pr.count} visits</span>)}</div></div>) : <Empty text="No completed visits in this report range." />}</Panel>
     <Panel title="Revenue by Service Type">{serviceRows.length ? serviceRows.map(s=><div key={s.name} style={S.reportRow}><b>{s.name}</b><span>{s.count} visits</span><span>{money(s.total)}</span>{s.unpaid ? <small>Unpaid {money(s.unpaid)}</small> : null}</div>) : <Empty text="No service revenue in this report range." />}</Panel>
-    <Panel title="Unpaid Completed Visits">{unpaid.length ? unpaid.map(v=><div key={v.id} style={S.reportRow}><b>{ownerMap[v.owner_id]?.name || "Unknown"}</b><span>{niceDate(v.visit_date)}</span><span>{serviceMap[v.service_id]?.name || "Service"}</span><small>{visitPetsForNames(v, visitPets, petMap)} · {money(v.total_amount)}</small><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>) : <Empty text="No unpaid completed visits in this report range." />}</Panel>
+    <Panel title="Unpaid Completed Visits">{unpaid.length ? unpaid.map(v=><div key={v.id} style={S.reportRow}><b>{ownerMap[v.owner_id]?.name || "Unknown"}</b><span>{niceDate(v.visit_date)}</span><span>{serviceMap[v.service_id]?.name || "Service"}</span><small>{visitPetsForNames(v, visitPets, petMap)} · {money(visitChargeTotal(v))}</small><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>) : <Empty text="No unpaid completed visits in this report range." />}</Panel>
     {preview && <PrintPreviewOverlay title="Report Print Preview" onClose={()=>setPreview(null)} onEmail={emailReport}><PetReportDocument preview={reportData} settings={settings} /></PrintPreviewOverlay>}
   </div>;
 }
@@ -1225,7 +1452,7 @@ function PaymentModal({ visit, owner, service, onClose, onSave }) {
   const [notes, setNotes] = useState(visit.payment_notes || "");
   return <Modal onClose={onClose} title="Mark Visit Paid"><div style={S.stack}>
     <b>{owner?.name || "Owner"}</b>
-    <span>{niceDate(visit.visit_date)} · {service?.name || "Service"} · {money(visit.total_amount)}</span>
+    <span>{niceDate(visit.visit_date)} · {service?.name || "Service"} · {money(visitChargeTotal(visit))}</span>
     <Field label="Payment method"><select value={method} onChange={e=>setMethod(e.target.value)}><option>Cash</option><option>E-transfer</option><option>Cheque</option><option>Card</option><option>Other</option></select></Field>
     <Field label="Payment notes"><textarea value={notes} onChange={e=>setNotes(e.target.value)} /></Field>
     <button style={S.primaryBtn} onClick={()=>onSave(visit.id, method, notes)}>Mark Paid</button>
@@ -1284,9 +1511,63 @@ function TravelAdmin({ travel, visits, ownerMap, serviceMap, onSaveTravel, onDel
   </Panel>;
 }
 function SettingsAdmin({ settings, onSaveSettings }) {
-  const [form, setForm] = useState(settings || { business_name:"Pet Care", business_phone:"", business_email:"", default_email:"", tax_number:"", business_notes:"", charge_gst:false, gst_rate:5 });
-  useEffect(()=>setForm(settings || form), [settings?.id]);
-  return <Panel title="Business Settings"><div style={S.formGrid}><Field label="Business name"><input value={form.business_name||""} onChange={e=>setForm({...form,business_name:e.target.value})}/></Field><Field label="Phone"><input value={form.business_phone||""} onChange={e=>setForm({...form,business_phone:e.target.value})}/></Field><Field label="Email"><input value={form.business_email||""} onChange={e=>setForm({...form,business_email:e.target.value})}/></Field><Field label="Default report email"><input value={form.default_email||""} onChange={e=>setForm({...form,default_email:e.target.value})}/></Field><Field label="Tax number"><input value={form.tax_number||""} onChange={e=>setForm({...form,tax_number:e.target.value})}/></Field><Field label="GST rate"><input type="number" value={form.gst_rate||0} onChange={e=>setForm({...form,gst_rate:e.target.value})}/></Field></div><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.charge_gst} onChange={e=>setForm({...form,charge_gst:e.target.checked})}/> <span>Charge GST</span></label><Field label="Business notes"><textarea value={form.business_notes||""} onChange={e=>setForm({...form,business_notes:e.target.value})}/></Field><button style={S.primaryBtn} onClick={()=>onSaveSettings(form)}>Save Settings</button></Panel>;
+  const defaultSettings = {
+    business_name:"Pet Care by Kiri",
+    service_description:"Pet care services",
+    business_phone:"",
+    business_email:"",
+    default_email:"",
+    business_website:"",
+    business_address:"",
+    show_business_address:false,
+    tax_number:"",
+    show_tax_number_on_documents:false,
+    charge_gst:false,
+    gst_rate:5,
+    payment_methods:"",
+    etransfer_email:"",
+    show_etransfer:false,
+    invoice_due_terms:"",
+    default_invoice_note:"",
+    invoice_footer_note:"",
+    business_notes:""
+  };
+  const [form, setForm] = useState({ ...defaultSettings, ...(settings || {}) });
+  useEffect(()=>setForm({ ...defaultSettings, ...(settings || {}) }), [settings?.id]);
+  return <Panel title="Business Settings">
+    <h3>Business contact</h3>
+    <p style={S.muted}>Only filled-in fields are shown on PDFs. Address, tax number, and e-transfer also need their show checkbox turned on.</p>
+    <div style={S.formGrid}>
+      <Field label="Business display name"><input value={form.business_name||""} onChange={e=>setForm({...form,business_name:e.target.value})}/></Field>
+      <Field label="Service description / tagline"><input value={form.service_description||""} onChange={e=>setForm({...form,service_description:e.target.value})}/></Field>
+      <Field label="Business phone"><input value={form.business_phone||""} onChange={e=>setForm({...form,business_phone:e.target.value})}/></Field>
+      <Field label="Business email"><input value={form.business_email||""} onChange={e=>setForm({...form,business_email:e.target.value})}/></Field>
+      <Field label="Default report email"><input value={form.default_email||""} onChange={e=>setForm({...form,default_email:e.target.value})}/></Field>
+      <Field label="Website / social link"><input value={form.business_website||""} onChange={e=>setForm({...form,business_website:e.target.value})}/></Field>
+    </div>
+    <Field label="Business address / service area"><textarea value={form.business_address||""} onChange={e=>setForm({...form,business_address:e.target.value})}/></Field>
+    <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.show_business_address} onChange={e=>setForm({...form,show_business_address:e.target.checked})}/> <span>Show business address on invoices, statements, reports, and forms</span></label>
+
+    <h3>Tax</h3>
+    <div style={S.formGrid}>
+      <Field label="Tax number"><input value={form.tax_number||""} onChange={e=>setForm({...form,tax_number:e.target.value})}/></Field>
+      <Field label="GST rate"><input type="number" value={form.gst_rate||0} onChange={e=>setForm({...form,gst_rate:e.target.value})}/></Field>
+    </div>
+    <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.charge_gst} onChange={e=>setForm({...form,charge_gst:e.target.checked})}/> <span>Charge GST</span></label>
+    <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.show_tax_number_on_documents} onChange={e=>setForm({...form,show_tax_number_on_documents:e.target.checked})}/> <span>Show tax number on documents</span></label>
+
+    <h3>Payment instructions</h3>
+    <div style={S.formGrid}>
+      <Field label="Accepted payment methods"><input placeholder="E-transfer, cash, cheque" value={form.payment_methods||""} onChange={e=>setForm({...form,payment_methods:e.target.value})}/></Field>
+      <Field label="E-transfer email"><input value={form.etransfer_email||""} onChange={e=>setForm({...form,etransfer_email:e.target.value})}/></Field>
+      <Field label="Invoice due terms"><input placeholder="Due on receipt / Due in 7 days" value={form.invoice_due_terms||""} onChange={e=>setForm({...form,invoice_due_terms:e.target.value})}/></Field>
+      <Field label="Default invoice note"><input placeholder="Thank you for your business" value={form.default_invoice_note||""} onChange={e=>setForm({...form,default_invoice_note:e.target.value})}/></Field>
+    </div>
+    <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.show_etransfer} onChange={e=>setForm({...form,show_etransfer:e.target.checked})}/> <span>Show e-transfer instructions on invoices/statements</span></label>
+    <Field label="Invoice / document footer message"><textarea value={form.invoice_footer_note||""} onChange={e=>setForm({...form,invoice_footer_note:e.target.value})}/></Field>
+    <Field label="Internal business notes"><textarea value={form.business_notes||""} onChange={e=>setForm({...form,business_notes:e.target.value})}/></Field>
+    <button style={S.primaryBtn} onClick={()=>onSaveSettings(form)}>Save Settings</button>
+  </Panel>;
 }
 function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
   return <Panel title="Deleted Items"><p style={S.muted}>Deleted items are logged here for reference. Restore can be added after the new data model is fully stable.</p>{deleted.map(d=><div key={d.id} style={S.reportRow}><b>{d.item_type}</b><span>{d.item_label}</span><span>{new Date(d.deleted_at).toLocaleString()}</span><button style={S.dangerMini} onClick={()=>onHardDeleteDeleted(d.id)}>Remove log</button></div>)}</Panel>;
@@ -1306,7 +1587,7 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
           <button key={p.id} style={{...S.petChip, background: hexToRgba(color,.12), color: color}} disabled={!canPetInfo} onClick={() => canPetInfo && onPetInfo(p.id)}>{p.name} Info</button>
         )) : <small style={S.muted}>No pet attached</small>}
       </div>
-      <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {num(visit.mileage) ? `${num(visit.mileage)} km · ` : ""}{visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
+      <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visitChargeTotal(visit))} · {num(visit.mileage) ? `${num(visit.mileage)} km · ` : ""}{visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
     </div>
     <div style={S.cardActionsCompact}>
       {visit.status === "Scheduled" && onStart && <button style={S.secondaryMini} onClick={() => onStart(visit.id)}>Start</button>}
@@ -1519,7 +1800,7 @@ function PetReadOnly({ pet, petTab, visits, serviceMap, visitPets, petMap, petCh
   if (petTab === "Checklist") return <div style={S.stack}>{petChecklist.filter(i=>i.pet_id===pet.id).length ? <ul>{petChecklist.filter(i=>i.pet_id===pet.id).map(i=><li key={i.id}>{i.label}</li>)}</ul> : <Empty text="No pet-specific checklist items yet." />}</div>;
   return <div style={S.stack}>{visits.length ? visits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} />) : <Empty text="No visit history for this pet yet." />}</div>;
 }
-function VisitHistoryRow({ visit, service, pets, onDeleteVisit }) { return <div style={S.visitHistory}><div><b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b><div style={S.muted}>{service?.name || "Service"} · {pets.map(p=>p.name).join(", ")}</div></div><div style={S.status}>{visit.status}</div><div><b>{money(visit.total_amount)}</b></div>{onDeleteVisit && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>; }
+function VisitHistoryRow({ visit, service, pets, onDeleteVisit }) { return <div style={S.visitHistory}><div><b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b><div style={S.muted}>{service?.name || "Service"} · {pets.map(p=>p.name).join(", ")}</div></div><div style={S.status}>{visit.status}</div><div><b>{money(visitChargeTotal(visit))}</b></div>{onDeleteVisit && <button style={S.dangerMini} onClick={()=>onDeleteVisit(visit)}>Delete</button>}</div>; }
 function formFileUrl(fileName) {
   return `${window.location.origin}/forms/${encodeURIComponent(fileName)}`;
 }
@@ -1552,7 +1833,7 @@ function documentPackageHtml(owner, pets, docs, settings) {
   const ownerBlock = `<div class="box"><b>Client / Owner</b><br>${escapeHtml(owner?.name || "")}<br>${escapeHtml(owner?.phone || "")}<br>${escapeHtml(owner?.email || "")}<br>${escapeHtml(owner?.address || "")}</div>`;
   const petBlock = `<div class="box"><b>Pets</b><br>${pets?.length ? pets.map(p => `${escapeHtml(p.name || "Pet")} — ${escapeHtml([p.species, p.breed, p.age_text].filter(Boolean).join(" · "))}`).join("<br>") : "No pets selected yet."}</div>`;
   const forms = docs.map(d => `<section style="break-inside:avoid;page-break-inside:avoid;margin-top:18px;border-top:1px solid #ddd;padding-top:14px"><h2>${escapeHtml(d.title)}</h2><p class="muted">Original file: ${escapeHtml(d.fileName)}</p>${prefillFormBody(d, owner, pets)}<div style="margin-top:26px;display:grid;grid-template-columns:1fr 1fr;gap:18px"><div>Client signature: ______________________________</div><div>Date: __________________</div></div></section>`).join("");
-  return `<div class="doc-head"><div><h1>${escapeHtml(settings?.business_name || "Pet Care by Kiri")}</h1><div>${escapeHtml(settings?.business_phone || "")}</div><div>${escapeHtml(settings?.business_email || "")}</div></div><div style="text-align:right"><h2>INTAKE DOCUMENTS</h2><div>${escapeHtml(owner?.name || "Selected owner")}</div><div>${new Date().toLocaleDateString()}</div></div></div><div class="bill-to">${ownerBlock}${petBlock}</div>${forms}<div class="footer">Please complete, sign, and return these documents before service begins.</div>`;
+  return `<div class="doc-head"><div>${businessContactHtml(settings)}</div><div style="text-align:right"><h2>INTAKE DOCUMENTS</h2><div>${escapeHtml(owner?.name || "Selected owner")}</div><div>${new Date().toLocaleDateString()}</div></div></div><div class="bill-to">${ownerBlock}${petBlock}</div>${forms}${documentFooterHtml(settings, "Please complete, sign, and return these documents before service begins.")}`;
 }
 function formTextarea(label, height = 70) { return `<div style="margin-top:10px"><b>${escapeHtml(label)}</b><div style="min-height:${height}px;border:1px solid #ddd;border-radius:8px;padding:10px;margin-top:5px"></div></div>`; }
 function signatureBlock(label = "Client signature") { return `<div style="margin-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:18px"><div>${escapeHtml(label)}: ______________________________</div><div>Date: __________________</div></div>`; }
@@ -1589,7 +1870,7 @@ function OwnerDocumentsPanel({ owner, pets, ownerDocuments, onUploadDocument, on
     <Panel title="Send Forms">
       <div style={S.row}><button style={S.primaryBtn} onClick={()=>setSelectedIds(CORE_DOCUMENT_IDS)}>Core Intake Package</button><button style={S.secondaryBtn} onClick={()=>setSelectedIds(DOCUMENT_TEMPLATES.map(d=>d.id))}>Select All</button><button style={S.secondaryBtn} onClick={()=>setSelectedIds([])}>Clear</button></div>
       {Object.entries(grouped).map(([group, list]) => <div key={group} style={S.detailBox}><b>{group}</b>{list.map(d => <label key={d.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={selectedIds.includes(d.id)} onChange={()=>toggleDoc(d.id)} /><span>{d.title}</span></label>)}</div>)}
-      <div style={S.row}><button style={S.primaryBtn} disabled={!docs.length} onClick={()=>printHtmlDocument(`${owner?.name || "Owner"} Intake Forms`, documentPackageHtml(owner, pets, docs, settings))}>Print Selected Forms</button><button style={S.secondaryBtn} disabled={!docs.length} onClick={()=>emailTextDocument(`${settings?.business_name || "Pet Care by Kiri"} Intake Forms`, buildDocumentEmailText(owner, pets, docs, settings), owner?.email)}>Email Selected Forms</button></div>
+      <div style={S.row}><button style={S.primaryBtn} disabled={!docs.length} onClick={()=>printHtmlDocument(`${owner?.name || "Owner"} Intake Forms`, documentPackageHtml(owner, pets, docs, settings))}>Download / Share Selected Forms PDF</button></div>
       <div style={S.detailBox}><b>Download original files</b><a style={S.phoneLink} href="/forms/Pet_Care_Business_Forms_Combined_v3.pdf" target="_blank" rel="noreferrer">Open full combined PDF</a><a style={S.phoneLink} href="/forms/Pet_Care_Business_Forms_Combined.docx" target="_blank" rel="noreferrer">Open editable combined DOCX</a></div>
     </Panel>
     <Panel title="Upload Signed / Returned Document">
@@ -1607,7 +1888,7 @@ function OwnerDocumentsPanel({ owner, pets, ownerDocuments, onUploadDocument, on
   </div>;
 }
 
-function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onMarkPaid, onMarkUnpaid, onMarkManyPaid }) {
+function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, settings, onMarkPaid, onMarkUnpaid, onMarkManyPaid }) {
   const completed = visits.filter(v=>v.status==="Completed");
   const [billingFilter, setBillingFilter] = useState("unpaid");
   const [billingRange, setBillingRange] = useState("all");
@@ -1623,10 +1904,10 @@ function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onM
   function ownerStatementText(rows, title) {
     const lines = [title, owner?.name || "Owner", owner?.address || "", owner?.invoice_email || owner?.email || "", ""];
     rows.forEach(v => {
-      lines.push(`${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} — ${serviceMap[v.service_id]?.name || "Service"} — ${visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} — ${money(v.total_amount)} — ${v.is_paid ? "Paid" : "Unpaid"}`);
+      lines.push(`${niceDate(v.visit_date)} ${v.scheduled_start_time || ""} — ${serviceMap[v.service_id]?.name || "Service"} — ${visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} — ${visitMoneyDetails(v)} — ${v.is_paid ? "Paid" : "Unpaid"}`);
     });
     lines.push("");
-    lines.push(`Total: ${money(rows.reduce((s,v)=>s+num(v.total_amount),0))}`);
+    lines.push(`Total: ${money(rows.reduce((s,v)=>s+visitChargeTotal(v),0))}`);
     return lines.join("\n");
   }
   const unpaidText = ownerStatementText(unpaid, "Invoice / Unpaid Statement");
@@ -1639,28 +1920,28 @@ function OwnerBillingSummary({ owner, visits, visitPets, petMap, serviceMap, onM
       const oneText = singleVisitBillingText(owner, v, visitPets, petMap, serviceMap, "Individual Invoice");
       return <div key={v.id} style={S.billingRowCompact}>
         <div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div>
-        <b>{money(v.total_amount)}</b><small>{v.is_paid ? "Paid" : "Unpaid"}</small>
-        <div style={S.row}><button style={S.secondaryMini} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Individual Invoice`, owner, [v], visitPets, petMap, serviceMap)}>Print This Invoice</button><button style={S.secondaryMini} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Individual Invoice`, oneText, owner?.invoice_email || owner?.email)}>Email This Invoice</button></div>
+        <b>{money(visitChargeTotal(v))}</b><small>{v.is_paid ? "Paid" : "Unpaid"}</small>
+        <div style={S.row}><button style={S.secondaryMini} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Individual Invoice`, owner, [v], visitPets, petMap, serviceMap, settings)}>Download / Share Invoice PDF</button></div>
       </div>;
     }) : <Empty text="No visits match this preview." />}</div></Panel>
-    <div style={S.row}><button style={S.primaryBtn} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Unpaid Invoice`, owner, unpaid, visitPets, petMap, serviceMap)}>Print All Unpaid</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Unpaid Invoice`, unpaidText, owner?.invoice_email || owner?.email)}>Email All Unpaid</button><button style={S.secondaryBtn} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Statement`, owner, completed, visitPets, petMap, serviceMap)}>Print Statement</button><button style={S.secondaryBtn} onClick={()=>emailTextDocument(`${owner?.name || "Owner"} Statement`, statementText, owner?.invoice_email || owner?.email)}>Email Statement</button></div>
+    <div style={S.row}><button style={S.primaryBtn} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Unpaid Invoice`, owner, unpaid, visitPets, petMap, serviceMap, settings)}>Download / Share Unpaid PDF</button><button style={S.secondaryBtn} onClick={()=>printBillingDocument(`${owner?.name || "Owner"} Statement`, owner, completed, visitPets, petMap, serviceMap, settings)}>Download / Share Statement PDF</button></div>
     <div style={S.infoGrid}>
       <InfoLine label="Owner" value={owner?.name} />
       <InfoLine label="Completed visits" value={completed.length} />
-      <InfoLine label="Completed revenue" value={money(completed.reduce((s,v)=>s+num(v.total_amount),0))} />
-      <InfoLine label="Unpaid total" value={money(unpaid.reduce((s,v)=>s+num(v.total_amount),0))} danger={unpaid.length>0} />
-      <InfoLine label="Paid total" value={money(paid.reduce((s,v)=>s+num(v.total_amount),0))} />
+      <InfoLine label="Completed revenue" value={money(completed.reduce((s,v)=>s+visitChargeTotal(v),0))} />
+      <InfoLine label="Unpaid total" value={money(unpaid.reduce((s,v)=>s+visitChargeTotal(v),0))} danger={unpaid.length>0} />
+      <InfoLine label="Paid total" value={money(paid.reduce((s,v)=>s+visitChargeTotal(v),0))} />
       <InfoLine label="Billing notes" value={owner?.billing_notes} />
       <InfoLine label="Payment notes" value={owner?.payment_notes} />
     </div>
     <Panel title="Unpaid Completed Visits">
       {unpaid.length ? <div style={S.stack}>
         <div style={S.row}><button style={S.primaryBtn} onClick={()=>onMarkManyPaid(selected)}>Mark Selected Paid</button><button style={S.secondaryBtn} onClick={()=>setSelected(unpaid.map(v=>v.id))}>Select All</button><button style={S.secondaryBtn} onClick={()=>setSelected([])}>Clear</button></div>
-        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> <span>Select</span></label><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(v.total_amount)}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
+        {unpaid.map(v=><div key={v.id} style={S.billingRow}><label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggle(v.id)} /> <span>Select</span></label><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")}</div></div><b>{money(visitChargeTotal(v))}</b><button style={S.primaryMini} onClick={()=>onMarkPaid(v.id)}>Mark Paid</button></div>)}
       </div> : <Empty text="No unpaid completed visits for this owner." />}
     </Panel>
     <Panel title="Paid Visits">
-      {paid.length ? paid.slice(0,25).map(v=><div key={v.id} style={S.billingRowCompact}><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} · {v.payment_method || "No method"}</div></div><b>{money(v.total_amount)}</b><small>{v.paid_at ? niceDate(String(v.paid_at).slice(0,10)) : "Paid"}</small><button style={S.secondaryMini} onClick={()=>onMarkUnpaid(v.id)}>Mark Unpaid</button></div>) : <Empty text="No paid visits yet." />}
+      {paid.length ? paid.slice(0,25).map(v=><div key={v.id} style={S.billingRowCompact}><div><b>{niceDate(v.visit_date)} {timeLabel(v.scheduled_start_time)}</b><div style={S.muted}>{serviceMap[v.service_id]?.name || "Service"} · {visitPetsFor(v, visitPets, petMap).map(p=>p.name).join(", ")} · {v.payment_method || "No method"}</div></div><b>{money(visitChargeTotal(v))}</b><small>{v.paid_at ? niceDate(String(v.paid_at).slice(0,10)) : "Paid"}</small><button style={S.secondaryMini} onClick={()=>onMarkUnpaid(v.id)}>Mark Unpaid</button></div>) : <Empty text="No paid visits yet." />}
     </Panel>
   </div>;
 }
@@ -1783,14 +2064,14 @@ const S = {
   toast:{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:50,background:"#071746",color:"#fff",padding:"10px 18px",borderRadius:999,animation:"successPop 1.4s ease"},
   saving:{position:"fixed",right:16,bottom:95,background:"#071746",color:"#fff",padding:"10px 14px",borderRadius:16,zIndex:60},
   bottomNav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"min(100%,430px)",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,padding:"10px 10px calc(10px + env(safe-area-inset-bottom))",background:"rgba(255,255,255,.94)",borderTop:"1px solid rgba(191,219,254,.9)",borderLeft:"1px solid rgba(191,219,254,.55)",borderRight:"1px solid rgba(191,219,254,.55)",borderRadius:"24px 24px 0 0",backdropFilter:"blur(16px)",zIndex:40,boxShadow:"0 -18px 42px rgba(8,21,58,.12)"},
-  navBtn:{border:"0",background:"transparent",borderRadius:18,padding:0,fontWeight:850,color:"#334155",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",minHeight:72,overflow:"visible",boxShadow:"none",aspectRatio:"1/1"},
-  navActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:18,padding:0,fontWeight:950,color:"#0f62fe",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",boxShadow:"0 14px 30px rgba(8,21,58,.16)",minHeight:76,overflow:"visible",aspectRatio:"1/1"},
+  navBtn:{border:"0",background:"transparent",borderRadius:18,padding:0,fontWeight:850,color:"#334155",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",minHeight:64,overflow:"visible",boxShadow:"none",aspectRatio:"1/1"},
+  navActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:18,padding:0,fontWeight:950,color:"#0f62fe",fontSize:13,display:"grid",placeItems:"stretch",position:"relative",boxShadow:"0 14px 30px rgba(8,21,58,.16)",minHeight:68,overflow:"visible",aspectRatio:"1/1"},
   navIcon:{lineHeight:1,display:"grid",placeItems:"center",color:"currentColor"},
-  primaryBtn:{border:0,background:"linear-gradient(135deg,#0f62fe 0%,#19b7ff 45%,#2dd4bf 100%)",color:"#fff",borderRadius:18,padding:"13px 18px",fontWeight:950,boxShadow:"0 14px 28px rgba(15,98,254,.25)",minHeight:48},
-  secondaryBtn:{border:"1px solid #bfdbfe",background:"#fff",color:"#071746",borderRadius:18,padding:"12px 15px",fontWeight:900,minHeight:46},
-  ghostBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.72)",borderRadius:16,padding:"10px 13px",fontWeight:900},
+  primaryBtn:{border:0,background:"linear-gradient(135deg,#0f62fe 0%,#19b7ff 45%,#2dd4bf 100%)",color:"#fff",borderRadius:999,padding:"12px 18px",fontWeight:950,boxShadow:"0 14px 28px rgba(15,98,254,.22)",minHeight:46},
+  secondaryBtn:{border:"1px solid #bfdbfe",background:"rgba(255,255,255,.96)",color:"#071746",borderRadius:999,padding:"11px 16px",fontWeight:900,minHeight:44,boxShadow:"0 8px 18px rgba(8,21,58,.055)"},
+  ghostBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.82)",borderRadius:999,padding:"10px 14px",fontWeight:900},
   refreshBtn:{border:"1px solid #dbeafe",background:"rgba(255,255,255,.80)",borderRadius:999,padding:"8px 11px",fontWeight:950,fontSize:18,minWidth:44,boxShadow:"0 12px 24px rgba(8,21,58,.08)"},
-  dangerBtn:{border:0,background:"#e11d48",color:"#fff",borderRadius:18,padding:"12px 15px",fontWeight:900},
+  dangerBtn:{border:0,background:"linear-gradient(135deg,#e11d48,#fb7185)",color:"#fff",borderRadius:999,padding:"12px 16px",fontWeight:950,boxShadow:"0 12px 24px rgba(225,29,72,.20)"},
   primaryMini:{border:0,background:"linear-gradient(135deg,#0f62fe,#2dd4bf)",color:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900,boxShadow:"0 9px 16px rgba(15,98,254,.18)"},
   secondaryMini:{border:"1px solid #bfdbfe",background:"#fff",borderRadius:14,padding:"9px 11px",fontWeight:900},
   dangerMini:{border:0,background:"#ffe4e6",color:"#be123c",borderRadius:14,padding:"9px 11px",fontWeight:900},
@@ -1868,13 +2149,16 @@ const S = {
   petLine:{display:"flex",gap:6,flexWrap:"wrap",marginTop:7},
   petChip:{border:0,background:"#dcfce7",borderRadius:999,padding:"7px 10px",fontWeight:900,color:"#14532d"},
   status:{fontSize:12,fontWeight:950,color:"#64748b"},
-  officeNav:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10},
+  officeNav:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"4px 0 12px"},
   officeIcon:{display:"grid",placeItems:"center",color:"currentColor"},
-  officeBtn:{border:"0",background:"transparent",borderRadius:28,padding:0,fontWeight:900,display:"grid",placeItems:"stretch",color:"#334155",minHeight:0,aspectRatio:"1/1",boxShadow:"none",position:"relative",overflow:"visible"},
-  officeActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:28,padding:0,fontWeight:950,color:"#0f62fe",display:"grid",placeItems:"stretch",minHeight:0,aspectRatio:"1/1",boxShadow:"0 18px 38px rgba(15,98,254,.16)",position:"relative",overflow:"visible"},
+  officeBtn:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:900,display:"grid",placeItems:"stretch",color:"#334155",minHeight:0,aspectRatio:"1/1",boxShadow:"none",position:"relative",overflow:"visible"},
+  officeActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:22,padding:0,fontWeight:950,color:"#0f62fe",display:"grid",placeItems:"stretch",minHeight:0,aspectRatio:"1/1",boxShadow:"0 14px 30px rgba(15,98,254,.16)",position:"relative",overflow:"visible"},
   scheduleFilters:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"0 0 12px"},
   scheduleFilter:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:900,display:"grid",placeItems:"stretch",color:"#334155",minHeight:0,aspectRatio:"1/1",position:"relative",overflow:"visible",boxShadow:"none"},
   scheduleFilterActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:22,padding:0,fontWeight:950,display:"grid",placeItems:"stretch",color:"#0f62fe",minHeight:0,aspectRatio:"1/1",boxShadow:"0 14px 30px rgba(15,98,254,.16)",position:"relative",overflow:"visible"},
+  filterPills:{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,margin:"0 0 12px"},
+  filterPill:{border:"1px solid #dbeafe",background:"#fff",borderRadius:999,padding:"10px 8px",fontWeight:900,color:"#334155",boxShadow:"0 8px 16px rgba(8,21,58,.055)"},
+  filterPillActive:{border:"1px solid #0f62fe",background:"linear-gradient(145deg,#eff6ff,#ffffff)",borderRadius:999,padding:"10px 8px",fontWeight:950,color:"#0f62fe",boxShadow:"0 10px 22px rgba(15,98,254,.14)"},
   reportRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,alignItems:"center",borderBottom:"1px solid #eff6ff",padding:"11px 0"},
   billingRow:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
   billingRowCompact:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:17,padding:12,background:"#fff"},
@@ -1887,7 +2171,7 @@ const S = {
   collapseSummary:{listStyle:"none",cursor:"pointer",padding:"14px 15px",fontWeight:950,color:"#071746"},
   phoneRow:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginTop:4},
   phoneLink:{color:"#0f766e",fontWeight:950,textDecoration:"none"},
-  callBtn:{display:"inline-flex",alignItems:"center",justifyContent:"center",minHeight:36,padding:"8px 13px",borderRadius:999,background:"#0f62fe",color:"#fff",fontWeight:950,textDecoration:"none",boxShadow:"0 8px 16px rgba(15,98,254,.18)"},
+  callBtn:{display:"inline-flex",alignItems:"center",justifyContent:"center",minHeight:38,padding:"8px 14px",borderRadius:999,background:"#fff",border:"1px solid #bfdbfe",color:"#071746",fontWeight:950,textDecoration:"none",boxShadow:"0 8px 16px rgba(8,21,58,.08)"},
   dangerZone:{border:"1px solid #fecaca",borderRadius:18,padding:12,background:"#fff1f2",display:"grid",gap:6},
   visitHistory:{display:"grid",gridTemplateColumns:"1fr",gap:8,alignItems:"start",border:"1px solid #dbeafe",borderRadius:16,padding:11,background:"#fff"},
   recentVisitRow:{display:"grid",gridTemplateColumns:"1fr",gap:6,borderTop:"1px solid #eff6ff",paddingTop:9},
@@ -1901,9 +2185,9 @@ const S = {
   iconTileImage:{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"contain",display:"block",transformOrigin:"center"},
   iconTileShine:{position:"absolute",inset:0,background:"transparent",pointerEvents:"none"},
   iconTileScrim:{position:"absolute",left:0,right:0,bottom:0,height:"42%",borderRadius:"0 0 inherit inherit",background:"linear-gradient(180deg,rgba(8,21,58,0),rgba(8,21,58,.42))",pointerEvents:"none"},
-  iconTileLabel:{position:"relative",zIndex:2,alignSelf:"end",justifySelf:"center",textAlign:"center",color:"#fff",fontWeight:950,fontSize:16,lineHeight:1.06,textShadow:"0 2px 8px rgba(8,21,58,.72)",padding:"0 8px 14px",letterSpacing:".1px"},
-  navTileLabel:{fontSize:11,padding:"0 4px 9px",lineHeight:1.05},
-  officeTileLabel:{fontSize:18,padding:"0 8px 14px"},
+  iconTileLabel:{position:"relative",zIndex:2,alignSelf:"end",justifySelf:"center",textAlign:"center",color:"#fff",fontWeight:950,fontSize:14,lineHeight:1.06,textShadow:"0 2px 8px rgba(8,21,58,.72)",padding:"0 6px 10px",letterSpacing:".1px"},
+  navTileLabel:{fontSize:10,padding:"0 4px 8px",lineHeight:1.05},
+  officeTileLabel:{fontSize:13,padding:"0 5px 9px"},
 
   highlightCard:{outline:"3px solid rgba(15,98,254,.45)",boxShadow:"0 0 0 6px rgba(15,98,254,.10),0 18px 42px rgba(15,98,254,.22)"},
   calendarWrap:{display:"grid",gap:10,border:"1px solid #dbeafe",borderRadius:22,padding:12,background:"linear-gradient(145deg,#ffffff,#f8fbff)",boxShadow:"0 12px 26px rgba(8,21,58,.06)",marginBottom:12},
