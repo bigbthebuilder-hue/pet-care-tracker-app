@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
 
-const VERSION = "PET_CARE_V25_ICON_ONLY_TILES";
+const VERSION = "PET_CARE_V27_CALENDAR_MILEAGE_NAV";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
@@ -32,7 +32,7 @@ const OWNER_TAB_IMAGE_ICONS = { "Owner Info": ICON_IMAGES.ownerDetails, Pets: IC
 const OFFICE_TAB_IMAGE_ICONS = { Reports: ICON_IMAGES.officeReports, Services: ICON_IMAGES.officeServices, Vets: ICON_IMAGES.officeVets, Travel: ICON_IMAGES.officeTravel, Settings: ICON_IMAGES.officeSettings, Deleted: ICON_IMAGES.officeDeleted };
 const PET_TAB_ICONS = { Profile: "paw", Care: "heartPulse", Emergency: "alertTriangle", Checklist: "squareCheck", History: "history" };
 const OFFICE_TAB_ICONS = { Reports: "barChart", Services: "bone", Vets: "cross", Travel: "car", Settings: "settings", Deleted: "trash" };
-const SCHEDULE_FILTERS = ["Upcoming", "Active", "Completed"];
+const SCHEDULE_FILTERS = ["Calendar", "Upcoming", "Active", "Completed"];
 const DEFAULT_SERVICE_COLORS = ["#0f62fe", "#10b981", "#8b5cf6", "#f97316", "#e11d48", "#06b6d4", "#f59e0b", "#ec4899"];
 
 const DOCUMENT_TEMPLATES = [
@@ -93,6 +93,29 @@ function todayISO() {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function isoFromDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function addDaysIso(iso, days) {
+  const d = parseDateOnly(iso) || new Date();
+  d.setDate(d.getDate() + days);
+  return isoFromDate(d);
+}
+function monthKeyFromIso(iso) {
+  return String(iso || todayISO()).slice(0, 7);
+}
+function monthLabel(monthKey) {
+  const [y,m] = String(monthKey || monthKeyFromIso(todayISO())).split("-").map(Number);
+  return new Date(y || new Date().getFullYear(), (m || 1) - 1, 1).toLocaleDateString(undefined, { month:"long", year:"numeric" });
+}
+function shiftMonthKey(monthKey, offset) {
+  const [y,m] = String(monthKey || monthKeyFromIso(todayISO())).split("-").map(Number);
+  return isoFromDate(new Date(y || new Date().getFullYear(), (m || 1) - 1 + offset, 1)).slice(0,7);
 }
 function addMinutes(time, minutes) {
   if (!time) return null;
@@ -255,11 +278,14 @@ export default function App() {
   function scrollToTopNow() {
     requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
+  function scrollToElementNow(id) {
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
   function scheduleVisitForOwner(ownerId) {
     if (!ownerId) return;
-    setScheduleSeed({ ownerId, stamp: Date.now() });
+    setScheduleSeed({ ownerId, visitDate: todayISO(), stamp: Date.now() });
     setTab("Schedule");
-    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    scrollToElementNow("schedule-form-panel");
   }
 
   function changeMainTab(nextTab) {
@@ -411,7 +437,7 @@ export default function App() {
       if (err) throw err;
       if (selectedPetIds.length) await supabase.from("pet_visit_pets").insert(selectedPetIds.map(pet_id => ({ visit_id: data.id, pet_id })));
       await createChecklistForVisit(data.id, selectedPetIds, form.service_id, form.saved_option_id);
-      setToast("Visit scheduled"); await loadAll();
+      setToast("Visit scheduled"); await loadAll(); return data;
     } catch (e) { setError(tableError(e)); }
     setSaving(false);
   }
@@ -441,7 +467,7 @@ export default function App() {
       if (selectedPetIds.length) await supabase.from("pet_visit_pets").insert(selectedPetIds.map(pet_id => ({ visit_id: visitId, pet_id })));
       await supabase.from("pet_visit_checklist_items").delete().eq("visit_id", visitId);
       await createChecklistForVisit(visitId, selectedPetIds, form.service_id, form.saved_option_id);
-      setToast("Visit rescheduled"); await loadAll();
+      setToast("Visit rescheduled"); await loadAll(); return { id: visitId, visit_date: form.visit_date || todayISO() };
     } catch (e) { setError(tableError(e)); }
     setSaving(false);
   }
@@ -580,14 +606,20 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
   const [editingVisitId, setEditingVisitId] = useState("");
   const [showAdvancedVisitDetails, setShowAdvancedVisitDetails] = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
-  const [scheduleFilter, setScheduleFilter] = useState("Upcoming");
+  const [scheduleFilter, setScheduleFilter] = useState("Calendar");
+  const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [monthKey, setMonthKey] = useState(monthKeyFromIso(todayISO()));
+  const [highlightVisitId, setHighlightVisitId] = useState("");
   const ownerPets = pets.filter(p => p.owner_id === form.owner_id && p.is_active).sort(byName);
   const petOptions = options.filter(o => petIds.includes(o.pet_id) && o.is_active);
   const upcomingOnlyVisits = visits.filter(v => v.status === "Scheduled").sort(visitSort);
   const activeOnlyVisits = visits.filter(v => v.status === "In Progress").sort(visitSort);
-  const visibleVisits = scheduleFilter === "Active" ? activeOnlyVisits : scheduleFilter === "Completed" ? [] : upcomingOnlyVisits;
+  const calendarDateVisits = visits.filter(v => v.visit_date === selectedDate).sort(visitSort);
+  const visibleVisits = scheduleFilter === "Active" ? activeOnlyVisits : scheduleFilter === "Completed" ? [] : scheduleFilter === "Calendar" ? calendarDateVisits : upcomingOnlyVisits;
   const completedVisits = visits.filter(v=>v.status==="Completed").sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`));
   const ownerRecentVisits = visits.filter(v => v.owner_id === form.owner_id).sort((a,b)=>`${b.visit_date || ""} ${b.scheduled_start_time || ""}`.localeCompare(`${a.visit_date || ""} ${a.scheduled_start_time || ""}`)).slice(0, 4);
+  function scrollToScheduleForm() { requestAnimationFrame(() => document.getElementById("schedule-form-panel")?.scrollIntoView({ behavior:"smooth", block:"start" })); }
+  function scrollToVisits() { requestAnimationFrame(() => document.getElementById("schedule-visits-panel")?.scrollIntoView({ behavior:"smooth", block:"start" })); }
   function visitMileageFor(nextPetIds, ownerId = form.owner_id) {
     return defaultMileageForPetIds(nextPetIds, pets, ownerMap[ownerId]);
   }
@@ -595,14 +627,19 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
     const activePets = pets.filter(p => p.owner_id === id && p.is_active).sort(byName);
     const autoPetIds = activePets.length === 1 ? [activePets[0].id] : [];
     setPetIds(autoPetIds);
-    setForm(f => ({...f, owner_id:id, primary_pet_id:autoPetIds[0] || "", saved_option_id:"", mileage:defaultMileageForPetIds(autoPetIds, pets, ownerMap[id])}));
+    setForm(f => ({...f, owner_id:id, primary_pet_id:autoPetIds[0] || "", saved_option_id:"", visit_date: f.visit_date || selectedDate || todayISO(), mileage:defaultMileageForPetIds(autoPetIds, pets, ownerMap[id])}));
   }
   useEffect(() => {
     if (!scheduleSeed?.ownerId) return;
+    const nextDate = scheduleSeed.visitDate || selectedDate || todayISO();
+    setSelectedDate(nextDate);
+    setMonthKey(monthKeyFromIso(nextDate));
+    setForm(f => ({ ...f, visit_date: nextDate }));
     pickOwner(scheduleSeed.ownerId);
     setEditingVisitId("");
+    setScheduleFilter("Calendar");
     setShowAdvancedVisitDetails(false);
-    requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    scrollToScheduleForm();
   }, [scheduleSeed?.stamp]);
   function togglePet(id) {
     setPetIds(prev => {
@@ -619,22 +656,49 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
     const o = options.find(x=>x.id===id); if (!o) return;
     setForm({...form, saved_option_id:id, service_id:o.service_id || "", duration_minutes:o.default_duration_minutes, base_price:o.default_price, mileage:visitMileageFor(petIds), internal_notes:o.default_visit_notes || ""});
   }
+  function pickCalendarDate(iso) {
+    setSelectedDate(iso);
+    setMonthKey(monthKeyFromIso(iso));
+    setForm(f => ({ ...f, visit_date: iso || todayISO() }));
+    setScheduleFilter("Calendar");
+  }
   function loadVisitForEdit(v) {
     const linkedPets = visitPets.filter(vp => vp.visit_id === v.id).map(vp => vp.pet_id);
     const nextPetIds = linkedPets.length ? linkedPets : (v.primary_pet_id ? [v.primary_pet_id] : []);
     setEditingVisitId(v.id);
     setForm({ ...blankVisit, ...v, scheduled_start_time: v.scheduled_start_time || "09:00" });
     setPetIds(nextPetIds);
+    setSelectedDate(v.visit_date || todayISO());
+    setMonthKey(monthKeyFromIso(v.visit_date || todayISO()));
+    setScheduleFilter("Calendar");
     setShowAdvancedVisitDetails(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollToScheduleForm();
+  }
+  async function saveVisit() {
+    if (editingVisitId) {
+      const saved = await onUpdate(editingVisitId, form, petIds);
+      setHighlightVisitId(editingVisitId);
+      setEditingVisitId("");
+      setForm(blankVisit);
+      setPetIds([]);
+      if (saved?.visit_date) pickCalendarDate(saved.visit_date);
+      setScheduleFilter("Calendar");
+      scrollToVisits();
+    } else {
+      const saved = await onAdd(form, petIds);
+      if (saved?.id) setHighlightVisitId(saved.id);
+      const savedDate = saved?.visit_date || form.visit_date || selectedDate || todayISO();
+      pickCalendarDate(savedDate);
+      setScheduleFilter("Calendar");
+      scrollToVisits();
+    }
   }
   return <section style={S.stack}>
-    <Panel title="Add Scheduled Visit">
+    <div id="schedule-form-panel"><Panel title={editingVisitId ? "Reschedule Visit" : "Add Scheduled Visit"}>
       <div style={S.formGrid}>
         <Field label="Owner"><select value={form.owner_id} onChange={e=>pickOwner(e.target.value)}><option value="">Select owner</option>{owners.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></Field>
         <Field label="Service"><select value={form.service_id || ""} onChange={e=>applyService(e.target.value)}><option value="">Select service</option>{services.filter(s=>s.is_active).map(s=><option key={s.id} value={s.id}>{s.name} — {money(s.base_price)}</option>)}</select></Field>
-        
-        <Field label="Date"><input type="date" value={form.visit_date} onClick={e=>e.currentTarget.showPicker?.()} onFocus={e=>e.currentTarget.showPicker?.()} onChange={e=>setForm({...form, visit_date:e.target.value})} /></Field>
+        <Field label="Date"><input type="date" value={form.visit_date || selectedDate} onClick={e=>e.currentTarget.showPicker?.()} onFocus={e=>e.currentTarget.showPicker?.()} onChange={e=>pickCalendarDate(e.target.value)} /></Field>
         <Field label="Start time"><select value={form.scheduled_start_time || ""} onChange={e=>setForm({...form, scheduled_start_time:e.target.value})}>{TIME_OPTIONS.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
       </div>
       {form.owner_id && <div style={S.selectedPetNotice}>Booking for: {petIds.length ? petIds.map(id=>petMap[id]?.name).filter(Boolean).join(", ") : "Select at least one pet"}</div>}
@@ -644,12 +708,14 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
         <div style={S.formGridPadded}>
           <Field label="Duration minutes"><input type="number" value={form.duration_minutes} onChange={e=>setForm({...form, duration_minutes:e.target.value})} /></Field>
           <Field label="Base price"><input type="number" value={form.base_price} onChange={e=>setForm({...form, base_price:e.target.value})} /></Field>
+          <Field label="Mileage"><input type="number" value={form.mileage ?? 0} onChange={e=>setForm({...form, mileage:e.target.value})} /></Field>
+          <Field label="Travel / mileage fee"><input type="number" value={form.travel_fee ?? 0} onChange={e=>setForm({...form, travel_fee:e.target.value})} /></Field>
           <Field label="Add-on fees"><input type="number" value={form.add_on_fees} onChange={e=>setForm({...form, add_on_fees:e.target.value})} /></Field>
           <Field label="Visit notes"><textarea value={form.internal_notes || ""} onChange={e=>setForm({...form, internal_notes:e.target.value})} /></Field>
         </div>
       </details>
       <div style={S.row}>
-        <button style={S.primaryBtn} onClick={()=>{ editingVisitId ? onUpdate(editingVisitId, form, petIds).then(()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }) : onAdd(form, petIds); }} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
+        <button style={S.primaryBtn} onClick={saveVisit} disabled={!form.owner_id || !form.service_id || petIds.length === 0}>{editingVisitId ? "Save Rescheduled Visit" : "Schedule Visit"}</button>
         {editingVisitId && <button style={S.secondaryBtn} onClick={()=>{ setEditingVisitId(""); setForm(blankVisit); setPetIds([]); }}>Cancel Edit</button>}
       </div>
       {form.owner_id && <div style={S.detailBox}>
@@ -661,15 +727,44 @@ function SchedulePage({ scheduleSeed, owners, pets, services, options, visits, v
           <button style={S.secondaryMini} onClick={()=>onRepeatVisit(v.id)}>Use as Template</button>
         </div>) : <Empty text="No recent visits for this owner yet." />}
       </div>}
-    </Panel>
-    <Panel title="Visits">
-      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>setScheduleFilter(f)}><IconTileCard src={f === "Active" ? ICON_IMAGES.scheduleActive : f === "Completed" ? ICON_IMAGES.scheduleCompleted : ICON_IMAGES.scheduleUpcoming} label={f} zoom={1} /></button>)}</div>
-      {scheduleFilter !== "Completed" && (visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} />) : <Empty text={scheduleFilter === "Active" ? "No visits in progress." : "No upcoming visits yet."} />)}
-      {scheduleFilter === "Completed" && <div style={S.stack}>{completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 6).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} />) : <Empty text="No completed visits yet." />}{completedVisits.length > 6 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}</div>}
-    </Panel>
+    </Panel></div>
+    <div id="schedule-visits-panel"><Panel title="Visits">
+      <div style={S.scheduleFilters}>{SCHEDULE_FILTERS.map(f => <button key={f} style={scheduleFilter===f ? S.scheduleFilterActive : S.scheduleFilter} onClick={()=>{setScheduleFilter(f); scrollToVisits();}}><IconTileCard src={f === "Active" ? ICON_IMAGES.scheduleActive : f === "Completed" ? ICON_IMAGES.scheduleCompleted : ICON_IMAGES.scheduleUpcoming} label={f} zoom={1} /></button>)}</div>
+      {scheduleFilter === "Calendar" && <ScheduleCalendar monthKey={monthKey} selectedDate={selectedDate} visits={visits} serviceMap={serviceMap} onSelectDate={pickCalendarDate} onPrev={()=>setMonthKey(shiftMonthKey(monthKey,-1))} onNext={()=>setMonthKey(shiftMonthKey(monthKey,1))} onToday={()=>pickCalendarDate(todayISO())} />}
+      {scheduleFilter !== "Completed" && (visibleVisits.length ? visibleVisits.map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} onReschedule={loadVisitForEdit} highlight={highlightVisitId===v.id} />) : <Empty text={scheduleFilter === "Active" ? "No visits in progress." : scheduleFilter === "Calendar" ? `No visits on ${niceDate(selectedDate)}.` : "No upcoming visits yet."} />)}
+      {scheduleFilter === "Completed" && <div style={S.stack}>{completedVisits.length ? completedVisits.slice(0, showAllCompleted ? 25 : 6).map(v => <VisitCard key={v.id} visit={v} owner={ownerMap[v.owner_id]} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onStart={onStart} onComplete={onComplete} onPetInfo={onPetInfo} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onDeleteVisit={onDeleteVisit} highlight={highlightVisitId===v.id} />) : <Empty text="No completed visits yet." />}{completedVisits.length > 6 && <button style={S.secondaryBtn} onClick={()=>setShowAllCompleted(!showAllCompleted)}>{showAllCompleted ? "Show fewer completed visits" : "View all completed visits"}</button>}</div>}
+    </Panel></div>
 
   </section>;
 }
+
+function ScheduleCalendar({ monthKey, selectedDate, visits, serviceMap, onSelectDate, onPrev, onNext, onToday }) {
+  const [y,m] = String(monthKey || monthKeyFromIso(todayISO())).split("-").map(Number);
+  const first = new Date(y || new Date().getFullYear(), (m || 1) - 1, 1);
+  const start = new Date(first);
+  start.setDate(first.getDate() - first.getDay());
+  const days = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    return isoFromDate(d);
+  });
+  const visitsByDate = visits.reduce((acc,v)=>{ (acc[v.visit_date] ||= []).push(v); return acc; }, {});
+  return <div style={S.calendarWrap}>
+    <div style={S.calendarHead}><button style={S.secondaryMini} onClick={onPrev}>‹</button><b>{monthLabel(monthKey)}</b><button style={S.secondaryMini} onClick={onNext}>›</button><button style={S.secondaryMini} onClick={onToday}>Today</button></div>
+    <div style={S.calendarWeek}>{["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=><b key={d}>{d}</b>)}</div>
+    <div style={S.calendarGrid}>{days.map(iso=>{
+      const dayVisits = (visitsByDate[iso] || []).sort(visitSort);
+      const isCurrent = iso.slice(0,7) === monthKey;
+      const isSelected = iso === selectedDate;
+      return <button key={iso} style={isSelected ? S.calendarDaySelected : isCurrent ? S.calendarDay : S.calendarDayMuted} onClick={()=>onSelectDate(iso)}>
+        <span style={S.calendarDayNum}>{Number(iso.slice(8,10))}</span>
+        <div style={S.calendarDots}>{dayVisits.slice(0,3).map(v=><span key={v.id} title={serviceMap[v.service_id]?.name || "Visit"} style={{...S.calendarDot, background:serviceColor(serviceMap[v.service_id])}} />)}{dayVisits.length>3 && <small style={S.calendarMore}>+{dayVisits.length-3}</small>}</div>
+      </button>;
+    })}</div>
+    <div style={S.selectedDateBar}><b>{niceDate(selectedDate)}</b><span>{(visitsByDate[selectedDate] || []).length} visit(s)</span></div>
+  </div>;
+}
+
 function OwnersPage({ owners, pets, services, options, petChecklist, visits, visitPets, selectedOwnerId, selectedPetId, setSelectedOwnerId, setSelectedPetId, ownerMap, petMap, serviceMap, onSaveOwner, onSavePet, onSaveOption, onAddPetChecklist, onDeleteOwner, onDeletePet, onDeleteOption, vetClinics, onSaveVetClinic, onPetInfo, onMarkPaid, onMarkUnpaid, onMarkManyPaid, onDeleteVisit, ownerDocuments = [], onUploadDocument, onDeleteDocument, settings, onScheduleVisit }) {
   const OWNER_TABS = ["Owner Info", "Pets", "Documents", "Schedule Visit", "Visits", "Billing"];
   const PET_TABS = ["Profile", "Care", "Emergency", "Checklist", "History"];
@@ -1196,13 +1291,13 @@ function SettingsAdmin({ settings, onSaveSettings }) {
 function DeletedAdmin({ deleted, onHardDeleteDeleted }) {
   return <Panel title="Deleted Items"><p style={S.muted}>Deleted items are logged here for reference. Restore can be added after the new data model is fully stable.</p>{deleted.map(d=><div key={d.id} style={S.reportRow}><b>{d.item_type}</b><span>{d.item_label}</span><span>{new Date(d.deleted_at).toLocaleString()}</span><button style={S.dangerMini} onClick={()=>onHardDeleteDeleted(d.id)}>Remove log</button></div>)}</Panel>;
 }
-function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit, onReschedule }) {
+function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPetInfo, onCancel, onMarkPaid, onMarkUnpaid, onDeleteVisit, onReschedule, highlight = false }) {
   const [actionsOpen, setActionsOpen] = useState(false);
   const safePets = (pets || []).filter(Boolean);
   const canPetInfo = typeof onPetInfo === "function";
   const hasActions = !!(onCancel || onDeleteVisit || onReschedule);
   const color = serviceColor(service);
-  return <div style={visitCardStyle(visit, service)}>
+  return <div style={{...visitCardStyle(visit, service), ...(highlight ? S.highlightCard : {})}}>
     <div>
       <b>{niceDate(visit.visit_date)} {timeLabel(visit.scheduled_start_time)}</b>
       <div>{owner?.name || "Unknown owner"} — {service?.name || "Service"}</div>
@@ -1211,7 +1306,7 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
           <button key={p.id} style={{...S.petChip, background: hexToRgba(color,.12), color: color}} disabled={!canPetInfo} onClick={() => canPetInfo && onPetInfo(p.id)}>{p.name} Info</button>
         )) : <small style={S.muted}>No pet attached</small>}
       </div>
-      <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
+      <small style={S.muted}>{visit.status} · {visit.duration_minutes} min · {money(visit.total_amount)} · {num(visit.mileage) ? `${num(visit.mileage)} km · ` : ""}{visit.is_paid ? `Paid${visit.paid_at ? " " + niceDate(String(visit.paid_at).slice(0,10)) : ""}` : "Unpaid"}</small>
     </div>
     <div style={S.cardActionsCompact}>
       {visit.status === "Scheduled" && onStart && <button style={S.secondaryMini} onClick={() => onStart(visit.id)}>Start</button>}
@@ -1227,6 +1322,7 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
         <div style={S.sheetMeta}>{niceDate(visit.visit_date)} · {service?.name || "Service"}</div>
         <div style={S.sheetActions}>
           {visit.status !== "Completed" && onReschedule && <button style={S.secondaryBtn} onClick={() => { setActionsOpen(false); onReschedule(visit); }}>Reschedule</button>}
+          {visit.status === "Completed" && onComplete && <button style={S.secondaryBtn} onClick={() => { setActionsOpen(false); onComplete(visit.id); }}>Edit Mileage / Notes</button>}
           {visit.status === "Scheduled" && onCancel && <button style={S.dangerMini} onClick={() => { setActionsOpen(false); onCancel(visit.id); }}>Cancel Visit</button>}
           {onDeleteVisit && <button style={S.dangerBtn} onClick={() => { setActionsOpen(false); onDeleteVisit(visit); }}>Delete Visit</button>}
         </div>
@@ -1235,7 +1331,29 @@ function VisitCard({ visit, owner, pets = [], service, onStart, onComplete, onPe
   </div>;
 }
 function CompleteModal({ visit, checklist, owner, pets, service, onToggleChecklist, onClose, onSave }) {
-  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "" });
+  const [form, setForm] = useState({ completion_notes: visit.completion_notes || "", incident_notes: visit.incident_notes || "", is_paid: !!visit.is_paid, payment_method: visit.payment_method || "", payment_notes: visit.payment_notes || "", mileage: visit.mileage ?? 0, travel_fee: visit.travel_fee ?? 0, mileage_chargeable: num(visit.travel_fee) > 0 });
+  const [tripDraft, setTripDraft] = useState({ date: visit.visit_date || todayISO(), reason:"", mileage:"", notes:"" });
+  const [trips, setTrips] = useState([]);
+  const tripMileageTotal = trips.reduce((s,t)=>s+num(t.mileage),0);
+  function addTrip() {
+    if (!num(tripDraft.mileage) && !String(tripDraft.reason || "").trim()) return;
+    const next = [...trips, { ...tripDraft, id: `${Date.now()}-${Math.random()}` }];
+    setTrips(next);
+    const total = next.reduce((s,t)=>s+num(t.mileage),0);
+    if (total > 0) setForm(f => ({ ...f, mileage: total }));
+    setTripDraft({ date: addDaysIso(tripDraft.date || visit.visit_date || todayISO(), 1), reason:"", mileage:"", notes:"" });
+  }
+  function removeTrip(id) {
+    const next = trips.filter(t=>t.id!==id);
+    setTrips(next);
+    const total = next.reduce((s,t)=>s+num(t.mileage),0);
+    if (total > 0) setForm(f => ({ ...f, mileage: total }));
+  }
+  function saveCompletion() {
+    const tripLines = trips.length ? "\n\nMileage / trip details:\n" + trips.map((t,i)=>`${i+1}. ${niceDate(t.date)} — ${t.reason || "Trip"} — ${num(t.mileage)} km${t.notes ? ` — ${t.notes}` : ""}`).join("\n") : "";
+    const cleanNotes = `${form.completion_notes || ""}${tripLines}`.trim();
+    onSave(visit.id, { ...form, completion_notes: cleanNotes, mileage: num(form.mileage), travel_fee: form.mileage_chargeable ? num(form.travel_fee) : 0 });
+  }
   const visibleChecklist = [];
   const seenChecklist = new Set();
   (checklist || []).forEach(i => {
@@ -1252,11 +1370,29 @@ function CompleteModal({ visit, checklist, owner, pets, service, onToggleCheckli
     <Panel title="Checklist">
       <div style={S.compactChecklist}>{visibleChecklist.length ? visibleChecklist.map(i=><label key={i.id} style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!i.is_done} onChange={()=>onToggleChecklist(i)} /> <span>{i.label}</span></label>) : <Empty text="No checklist items for this visit." />}</div>
     </Panel>
+    <Panel title="Mileage / Travel">
+      <div style={S.formGrid}>
+        <Field label="Total mileage for this job"><input type="number" value={form.mileage} onChange={e=>setForm({...form,mileage:e.target.value})} /></Field>
+        <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.mileage_chargeable} onChange={e=>setForm({...form,mileage_chargeable:e.target.checked})}/> <span>Charge mileage to client</span></label>
+        {form.mileage_chargeable && <Field label="Travel / mileage fee"><input type="number" value={form.travel_fee} onChange={e=>setForm({...form,travel_fee:e.target.value})} /></Field>}
+      </div>
+      <details style={S.collapse}>
+        <summary style={S.collapseSummary}>Optional trip breakdown</summary>
+        <div style={S.formGridPadded}>
+          <Field label="Trip date"><input type="date" value={tripDraft.date} onChange={e=>setTripDraft({...tripDraft,date:e.target.value})} /></Field>
+          <Field label="Reason"><input placeholder="Arrival, supplies, vet, final return" value={tripDraft.reason} onChange={e=>setTripDraft({...tripDraft,reason:e.target.value})} /></Field>
+          <Field label="Mileage"><input type="number" value={tripDraft.mileage} onChange={e=>setTripDraft({...tripDraft,mileage:e.target.value})} /></Field>
+          <Field label="Trip notes"><textarea value={tripDraft.notes} onChange={e=>setTripDraft({...tripDraft,notes:e.target.value})} /></Field>
+          <button style={S.secondaryBtn} onClick={addTrip}>Add Trip</button>
+          {trips.length > 0 && <div style={S.detailBox}><b>Trip total: {tripMileageTotal} km</b>{trips.map(t=><div key={t.id} style={S.tripRow}><span>{niceDate(t.date)} · {t.reason || "Trip"}</span><b>{num(t.mileage)} km</b><button style={S.dangerMini} onClick={()=>removeTrip(t.id)}>Remove</button>{t.notes && <small>{t.notes}</small>}</div>)}</div>}
+        </div>
+      </details>
+    </Panel>
     <label style={S.checkCompact}><input style={S.checkboxSmall} type="checkbox" checked={!!form.is_paid} onChange={e=>setForm({...form,is_paid:e.target.checked})}/> <span>Mark as paid</span></label>
     {form.is_paid && <><Field label="Payment method"><select value={form.payment_method || ""} onChange={e=>setForm({...form,payment_method:e.target.value})}><option value="">Select method</option><option>Cash</option><option>E-transfer</option><option>Cheque</option><option>Card</option><option>Other</option></select></Field><Field label="Payment notes"><textarea value={form.payment_notes || ""} onChange={e=>setForm({...form,payment_notes:e.target.value})}/></Field></>}
     <Field label="Completion notes"><textarea value={form.completion_notes} onChange={e=>setForm({...form,completion_notes:e.target.value})}/></Field>
     <Field label="Incident / issue notes"><textarea value={form.incident_notes} onChange={e=>setForm({...form,incident_notes:e.target.value})}/></Field>
-    <button style={S.primaryBtn} onClick={()=>onSave(visit.id, form)}>Mark Completed</button>
+    <button style={S.primaryBtn} onClick={saveCompletion}>{visit.status === "Completed" ? "Save Completion / Mileage" : "Mark Completed"}</button>
   </div></Modal>;
 }
 
@@ -1768,4 +1904,19 @@ const S = {
   iconTileLabel:{position:"relative",zIndex:2,alignSelf:"end",justifySelf:"center",textAlign:"center",color:"#fff",fontWeight:950,fontSize:16,lineHeight:1.06,textShadow:"0 2px 8px rgba(8,21,58,.72)",padding:"0 8px 14px",letterSpacing:".1px"},
   navTileLabel:{fontSize:11,padding:"0 4px 9px",lineHeight:1.05},
   officeTileLabel:{fontSize:18,padding:"0 8px 14px"},
+
+  highlightCard:{outline:"3px solid rgba(15,98,254,.45)",boxShadow:"0 0 0 6px rgba(15,98,254,.10),0 18px 42px rgba(15,98,254,.22)"},
+  calendarWrap:{display:"grid",gap:10,border:"1px solid #dbeafe",borderRadius:22,padding:12,background:"linear-gradient(145deg,#ffffff,#f8fbff)",boxShadow:"0 12px 26px rgba(8,21,58,.06)",marginBottom:12},
+  calendarHead:{display:"grid",gridTemplateColumns:"auto 1fr auto auto",gap:8,alignItems:"center"},
+  calendarWeek:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5,textAlign:"center",fontSize:11,color:"#64748b"},
+  calendarGrid:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5},
+  calendarDay:{border:"1px solid #dbeafe",background:"#fff",borderRadius:12,minHeight:55,padding:5,textAlign:"left",display:"grid",alignContent:"space-between"},
+  calendarDayMuted:{border:"1px solid #eef2ff",background:"#f8fafc",color:"#94a3b8",borderRadius:12,minHeight:55,padding:5,textAlign:"left",display:"grid",alignContent:"space-between",opacity:.72},
+  calendarDaySelected:{border:"2px solid #0f62fe",background:"linear-gradient(145deg,#eff6ff,#ffffff)",borderRadius:12,minHeight:55,padding:4,textAlign:"left",display:"grid",alignContent:"space-between",boxShadow:"0 10px 20px rgba(15,98,254,.16)"},
+  calendarDayNum:{fontSize:12,fontWeight:950},
+  calendarDots:{display:"flex",gap:3,alignItems:"center",flexWrap:"wrap",minHeight:12},
+  calendarDot:{width:7,height:7,borderRadius:999,display:"inline-block",boxShadow:"0 2px 5px rgba(8,21,58,.18)"},
+  calendarMore:{fontSize:9,fontWeight:950,color:"#475569"},
+  selectedDateBar:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"9px 10px",borderRadius:14,background:"#eff6ff",fontWeight:900,color:"#071746"},
+  tripRow:{display:"grid",gridTemplateColumns:"1fr auto auto",gap:8,alignItems:"center",borderTop:"1px solid #eff6ff",paddingTop:8},
 };
