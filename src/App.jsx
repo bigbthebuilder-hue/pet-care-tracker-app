@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
-import html2canvas from "html2canvas";
-import { jsPDF } from "jspdf";
 
-const VERSION = "PET_CARE_V32_BUSINESS_DOCUMENT_SETTINGS";
+const VERSION = "PET_CARE_V33_BROWSER_PDF_DOCUMENTS";
 const TABS = ["Today", "Schedule", "Owners", "Office"];
 const OFFICE_TABS = ["Reports", "Services", "Vets", "Travel", "Settings", "Deleted"];
 const STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled", "Missed"];
@@ -991,20 +989,20 @@ function PrintPreviewOverlay({ title, onClose, children }) {
   const [busy, setBusy] = useState(false);
   const filename = `${safeFileName(title || "pet-care-report")}.pdf`;
   async function handleDownload() {
-    try { setBusy(true); downloadBlob(await makePdfBlobFromElement(paperRef.current, filename), filename); }
-    catch (err) { console.error(err); window.alert("PDF could not be created. Try again after closing other apps/tabs."); }
+    try { setBusy(true); printCurrentDocument(); }
+    catch (err) { console.error(err); window.alert("The print/save PDF window could not be opened."); }
     finally { setBusy(false); }
   }
   async function handleShare() {
-    try { setBusy(true); await sharePdfBlob(await makePdfBlobFromElement(paperRef.current, filename), filename, title); }
-    catch (err) { console.error(err); window.alert("PDF could not be shared. It may have been downloaded instead."); }
+    try { setBusy(true); explainPdfSharing(); }
+    catch (err) { console.error(err); window.alert("Use Print / Save PDF, then share the saved PDF file from your device."); }
     finally { setBusy(false); }
   }
   return <div className="print-preview-screen v30-print-root" style={S.printOverlay}>
     <style>{`${docStyles()} .v30-print-paper{background:#fff;width:816px;max-width:calc(100vw - 28px);margin:0 auto;padding:36px;border:1px solid #dbeafe;border-radius:18px;box-shadow:0 20px 60px rgba(15,98,254,.10)}`}</style>
     <div className="print-preview-toolbar" style={S.printToolbar}>
       <b>{title}</b>
-      <div style={S.row}><button style={S.primaryBtn} disabled={busy} onClick={handleDownload}>Download PDF</button><button style={S.secondaryBtn} disabled={busy} onClick={handleShare}>Share PDF</button><button style={S.secondaryBtn} disabled={busy} onClick={onClose}>Close Preview</button></div>
+      <div style={S.row}><button style={S.primaryBtn} disabled={busy} onClick={handleDownload}>Print / Save PDF</button><button style={S.secondaryBtn} disabled={busy} onClick={handleShare}>Share Help</button><button style={S.secondaryBtn} disabled={busy} onClick={onClose}>Close Preview</button></div>
     </div>
     <div ref={paperRef} className="v30-print-paper"><div className="v30-doc">{children}</div></div>
   </div>;
@@ -1149,60 +1147,11 @@ function docStyles() {
     @media (max-width: 720px) { .v30-doc .summary-grid { grid-template-columns: repeat(2, 1fr); } .v30-doc .two-col { grid-template-columns: 1fr; } }
   `;
 }
-async function makePdfBlobFromElement(element, filename = "pet-care-document.pdf") {
-  const canvas = await html2canvas(element, {
-    scale: Math.min(2.4, Math.max(1.8, window.devicePixelRatio || 2)),
-    backgroundColor: "#ffffff",
-    useCORS: true,
-    logging: false,
-    windowWidth: element.scrollWidth,
-  });
-  const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "letter", compress: true });
-  const pageW = pdf.internal.pageSize.getWidth();
-  const pageH = pdf.internal.pageSize.getHeight();
-  const margin = 36;
-  const contentW = pageW - margin * 2;
-  const contentH = pageH - margin * 2;
-  const slicePxH = Math.floor(canvas.width * (contentH / contentW));
-  let y = 0;
-  let page = 0;
-  while (y < canvas.height) {
-    const h = Math.min(slicePxH, canvas.height - y);
-    const pageCanvas = document.createElement("canvas");
-    pageCanvas.width = canvas.width;
-    pageCanvas.height = h;
-    const ctx = pageCanvas.getContext("2d");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-    ctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
-    const imgData = pageCanvas.toDataURL("image/jpeg", 0.96);
-    if (page > 0) pdf.addPage();
-    const renderedH = h * (contentW / canvas.width);
-    pdf.addImage(imgData, "JPEG", margin, margin, contentW, renderedH, undefined, "FAST");
-    y += h;
-    page += 1;
-  }
-  return pdf.output("blob");
+function printCurrentDocument() {
+  window.print();
 }
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
-}
-async function sharePdfBlob(blob, filename, title) {
-  const file = new File([blob], filename, { type: "application/pdf" });
-  if (navigator.canShare?.({ files: [file] }) && navigator.share) {
-    await navigator.share({ files: [file], title: title || filename, text: title || filename });
-    return true;
-  }
-  downloadBlob(blob, filename);
-  window.alert("PDF sharing is not available in this browser, so the PDF was downloaded instead.");
-  return false;
+function explainPdfSharing() {
+  window.alert("Use Print / Save PDF to create the PDF, then attach or share that saved PDF file from your device.");
 }
 function printHtmlDocument(title, bodyHtml, options = {}) {
   const safeTitle = escapeHtml(title || "Pet Care Document");
@@ -1218,7 +1167,7 @@ function printHtmlDocument(title, bodyHtml, options = {}) {
       .v30-print-paper { background: white; width: 816px; max-width: calc(100vw - 28px); margin: 0 auto; padding: 36px; border: 1px solid #dbeafe; border-radius: 18px; box-shadow: 0 20px 60px rgba(15,98,254,.10); }
       ${docStyles()}
     </style>
-    <div class="v30-print-toolbar"><strong>${safeTitle}</strong><div><button class="primary" data-pdf>Download PDF</button><button data-share>Share PDF</button><button data-close>Close</button></div></div>
+    <div class="v30-print-toolbar"><strong>${safeTitle}</strong><div><button class="primary" data-pdf>Print / Save PDF</button><button data-share>Share Help</button><button data-close>Close</button></div></div>
     <div class="v30-print-paper"><div class="v30-doc">${bodyHtml || ""}</div></div>
   `;
   document.body.appendChild(root);
@@ -1226,13 +1175,13 @@ function printHtmlDocument(title, bodyHtml, options = {}) {
   const setBusy = (busy) => root.querySelectorAll("button").forEach(b => b.disabled = !!busy);
   root.querySelector("[data-close]")?.addEventListener("click", () => root.remove());
   root.querySelector("[data-pdf]")?.addEventListener("click", async () => {
-    try { setBusy(true); downloadBlob(await makePdfBlobFromElement(paper, filename), filename); }
-    catch (err) { console.error(err); window.alert("PDF could not be created. Try again after closing other apps/tabs."); }
+    try { setBusy(true); printCurrentDocument(); }
+    catch (err) { console.error(err); window.alert("The print/save PDF window could not be opened."); }
     finally { setBusy(false); }
   });
   root.querySelector("[data-share]")?.addEventListener("click", async () => {
-    try { setBusy(true); await sharePdfBlob(await makePdfBlobFromElement(paper, filename), filename, title); }
-    catch (err) { console.error(err); window.alert("PDF could not be shared. It may have been downloaded instead."); }
+    try { setBusy(true); explainPdfSharing(); }
+    catch (err) { console.error(err); window.alert("Use Print / Save PDF, then share the saved PDF file from your device."); }
     finally { setBusy(false); }
   });
 }
