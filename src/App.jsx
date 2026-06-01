@@ -864,55 +864,90 @@ function OwnersPage({ owners, pets, services, options, petChecklist, visits, vis
   }
 
   return <section style={S.stack}>
-    <div style={S.twoColBalanced}>
-      <Panel title="Pet Owners">
-        <button style={S.primaryBtn} onClick={newOwner}>New Owner</button>
-        <div style={S.list}>{owners.map(o=><button key={o.id} style={selectedOwnerId===o.id?S.listActive:S.listBtn} onClick={()=>{setSelectedOwnerId(o.id); setSelectedPetId(""); setOwnerEditMode(false); setOwnerTab("Owner Info");}}>{o.name || "Unnamed owner"}<small>{o.phone || o.email || "No contact info"}</small></button>)}</div>
-      </Panel>
+    <div style={S.ownerFunctionNav}>{OWNER_TABS.map(t=>{
+      const label = t === "Owner Info" ? "Details" : t === "Documents" ? "Docs" : t;
+      const isScheduleVisit = t === "Schedule Visit";
+      const isActive = ownerTab === t && !isScheduleVisit;
+      const isDisabled = !selectedOwnerId;
+      return <button
+        key={t}
+        style={isDisabled ? S.ownerFunctionBtnDisabled : isActive ? S.ownerFunctionBtnActive : S.ownerFunctionBtn}
+        disabled={isDisabled}
+        onClick={()=>{
+          if (!selectedOwnerId) return;
+          if (isScheduleVisit) { onScheduleVisit?.(selectedOwnerId); return; }
+          setOwnerTab(t);
+          setOwnerEditMode(false);
+          setPetEditMode(false);
+          setOptionEditMode(false);
+        }}
+      ><IconTileCard src={OWNER_TAB_IMAGE_ICONS[t]} label={label} zoom={1} /></button>;
+    })}</div>
 
-      {!selectedOwnerId && ownerEditMode && <Panel title="New Owner">
-        <OwnerForm value={ownerForm} onChange={setOwnerForm} />
-        <div style={S.row}><button style={S.primaryBtn} onClick={()=>onSaveOwner(ownerForm)}>Save Owner</button></div>
-      </Panel>}
+    <Panel title="Owner">
+      <div style={S.ownerSelectorGrid}>
+        <label style={S.fieldLabel}>Current owner</label>
+        <select
+          value={selectedOwnerId || ""}
+          onChange={(e)=>{
+            setSelectedOwnerId(e.target.value);
+            setSelectedPetId("");
+            setOwnerEditMode(false);
+            setPetEditMode(false);
+            setOptionEditMode(false);
+          }}
+        >
+          <option value="">Select owner</option>
+          {owners.map(o=><option key={o.id} value={o.id}>{o.name || "Unnamed owner"}{o.phone ? ` — ${o.phone}` : o.email ? ` — ${o.email}` : ""}</option>)}
+        </select>
+        <div style={S.ownerSelectorActions}>
+          <button style={S.primaryBtn} onClick={newOwner}>New Owner</button>
+          {selectedOwner && <span style={S.muted}>Using <b>{selectedOwner.name || "selected owner"}</b> for Details, Pets, Docs, Visits, and Billing.</span>}
+        </div>
+      </div>
+    </Panel>
 
-      {selectedOwnerId && <Panel title="">
-        <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
-        <div style={S.ownerSubGrid}>{OWNER_TABS.map(t=>{ const label = t === "Owner Info" ? "Details" : t === "Documents" ? "Docs" : t; const isScheduleVisit = t === "Schedule Visit"; return <button key={t} style={ownerTab===t&&!isScheduleVisit?S.subTabActive:S.subTab} onClick={()=>{ if (isScheduleVisit) { onScheduleVisit?.(selectedOwnerId); return; } setOwnerTab(t); setOwnerEditMode(false); setPetEditMode(false); setOptionEditMode(false);}}><IconTileCard src={OWNER_TAB_IMAGE_ICONS[t]} label={label} zoom={1} /></button>; })}</div>
+    {!selectedOwnerId && ownerEditMode && <Panel title="New Owner">
+      <OwnerForm value={ownerForm} onChange={setOwnerForm} />
+      <div style={S.row}><button style={S.primaryBtn} onClick={()=>onSaveOwner(ownerForm)}>Save Owner</button></div>
+    </Panel>}
 
-        {ownerTab === "Owner Info" && <div style={S.stack}>
-          {!ownerEditMode ? <OwnerSummary owner={selectedOwner} /> : <OwnerForm value={ownerForm} onChange={setOwnerForm} />}
-          <div style={S.splitRow}>{!ownerEditMode ? <button style={S.secondaryBtn} onClick={()=>setOwnerEditMode(true)}>Edit Owner Info</button> : <button style={S.primaryBtn} onClick={()=>{onSaveOwner(ownerForm); setOwnerEditMode(false);}}>Save Owner</button>}<div>{selectedOwner?.id && <button style={S.dangerMini} onClick={()=>onDeleteOwner(selectedOwner)}>Delete Owner</button>}</div></div>
+    {selectedOwnerId && <Panel title="">
+      <OwnerHero owner={selectedOwner} onEdit={()=>{setOwnerTab("Owner Info"); setOwnerEditMode(true);}} />
+
+      {ownerTab === "Owner Info" && <div style={S.stack}>
+        {!ownerEditMode ? <OwnerSummary owner={selectedOwner} /> : <OwnerForm value={ownerForm} onChange={setOwnerForm} />}
+        <div style={S.splitRow}>{!ownerEditMode ? <button style={S.secondaryBtn} onClick={()=>setOwnerEditMode(true)}>Edit Owner Info</button> : <button style={S.primaryBtn} onClick={()=>{onSaveOwner(ownerForm); setOwnerEditMode(false);}}>Save Owner</button>}<div>{selectedOwner?.id && <button style={S.dangerMini} onClick={()=>onDeleteOwner(selectedOwner)}>Delete Owner</button>}</div></div>
+      </div>}
+
+      {ownerTab === "Pets" && <div style={S.stack}>
+        <div style={S.row}><button style={S.primaryBtn} onClick={newPet}>Add Pet</button><span style={S.muted}>Each pet has its own profile, care notes, emergency info, checklist, and history.</span></div>
+        <div style={S.petCards}>{ownerPets.map(p=><PetMini key={p.id} pet={p} active={selectedPetId===p.id} onClick={()=>{setSelectedPetId(p.id); setPetEditMode(false);}} onInfo={()=>onPetInfo(p.id)} />)}</div>
+        {(selectedPet || petEditMode) && <div style={S.detailBox}>
+          <div style={S.petSubGrid}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false);}}><span style={S.subTabIcon}><Icon name={PET_TAB_ICONS[t]} size={30}/></span><span>{t}</span></button>)}</div>
+          {!petEditMode ? <PetReadOnly pet={selectedPet} petTab={petTab} visits={petVisits} serviceMap={serviceMap} visitPets={visitPets} petMap={petMap} petChecklist={petChecklist} vetClinics={vetClinics} /> : <PetForm value={petForm} onChange={setPetForm} vetClinics={vetClinics} onSaveVetClinic={onSaveVetClinic} />}
+          <div style={S.row}>{!petEditMode ? <button style={S.secondaryBtn} onClick={()=>setPetEditMode(true)}>Edit Pet</button> : <button style={S.primaryBtn} onClick={()=>{onSavePet({...petForm, owner_id:selectedOwnerId}); setPetEditMode(false);}}>Save Pet</button>}{selectedPet?.id && <><button style={S.secondaryBtn} onClick={()=>onPetInfo(selectedPet.id)}>Emergency Info</button></>}</div>
+          {selectedPet?.id && <div style={S.dangerZone}><b>Danger zone</b><small>Deleting a pet requires typing the exact pet name.</small><button style={S.dangerMini} onClick={()=>onDeletePet(selectedPet)}>Delete Pet</button></div>}
         </div>}
+      </div>}
 
-        {ownerTab === "Pets" && <div style={S.stack}>
-          <div style={S.row}><button style={S.primaryBtn} onClick={newPet}>Add Pet</button><span style={S.muted}>Each pet has its own profile, care notes, emergency info, checklist, and history.</span></div>
-          <div style={S.petCards}>{ownerPets.map(p=><PetMini key={p.id} pet={p} active={selectedPetId===p.id} onClick={()=>{setSelectedPetId(p.id); setPetEditMode(false);}} onInfo={()=>onPetInfo(p.id)} />)}</div>
-          {(selectedPet || petEditMode) && <div style={S.detailBox}>
-            <div style={S.petSubGrid}>{PET_TABS.map(t=><button key={t} style={petTab===t?S.subTabActive:S.subTab} onClick={()=>{setPetTab(t); setPetEditMode(false);}}><span style={S.subTabIcon}><Icon name={PET_TAB_ICONS[t]} size={30}/></span><span>{t}</span></button>)}</div>
-            {!petEditMode ? <PetReadOnly pet={selectedPet} petTab={petTab} visits={petVisits} serviceMap={serviceMap} visitPets={visitPets} petMap={petMap} petChecklist={petChecklist} vetClinics={vetClinics} /> : <PetForm value={petForm} onChange={setPetForm} vetClinics={vetClinics} onSaveVetClinic={onSaveVetClinic} />}
-            <div style={S.row}>{!petEditMode ? <button style={S.secondaryBtn} onClick={()=>setPetEditMode(true)}>Edit Pet</button> : <button style={S.primaryBtn} onClick={()=>{onSavePet({...petForm, owner_id:selectedOwnerId}); setPetEditMode(false);}}>Save Pet</button>}{selectedPet?.id && <><button style={S.secondaryBtn} onClick={()=>onPetInfo(selectedPet.id)}>Emergency Info</button></>}</div>
-            {selectedPet?.id && <div style={S.dangerZone}><b>Danger zone</b><small>Deleting a pet requires typing the exact pet name.</small><button style={S.dangerMini} onClick={()=>onDeletePet(selectedPet)}>Delete Pet</button></div>}
-          </div>}
-        </div>}
+      {ownerTab === "Documents" && <OwnerDocumentsPanel owner={selectedOwner} pets={ownerPets} ownerDocuments={ownerDocuments.filter(d=>d.owner_id===selectedOwnerId)} onUploadDocument={onUploadDocument} onDeleteDocument={onDeleteDocument} settings={settings} />}
 
-        {ownerTab === "Documents" && <OwnerDocumentsPanel owner={selectedOwner} pets={ownerPets} ownerDocuments={ownerDocuments.filter(d=>d.owner_id===selectedOwnerId)} onUploadDocument={onUploadDocument} onDeleteDocument={onDeleteDocument} settings={settings} />}
+      {ownerTab === "Saved Services" && <div style={S.stack}>
+        <div style={S.row}><button style={S.primaryBtn} onClick={()=>newOption()}>Add Saved Service Option</button><span style={S.muted}>Saved options are quick templates. They do not auto-schedule visits.</span></div>
+        {optionEditMode && <div style={S.detailBox}><OptionForm value={optionForm} onChange={setOptionForm} services={services} pets={ownerPets} /><button style={S.primaryBtn} onClick={()=>{onSaveOption({...optionForm, owner_id:selectedOwnerId}); setOptionEditMode(false);}}>Save Service Option</button></div>}
+        <div style={S.cards}>{options.filter(o=>o.owner_id===selectedOwnerId).map(o=><div key={o.id} style={S.smallCard}><b>{o.option_name}</b><span>{petMap[o.pet_id]?.name || "Owner option"}</span><span>{serviceMap[o.service_id]?.name || "Custom service"}</span><span>{money(o.default_price)} / {o.default_duration_minutes} min</span><div style={S.row}><button style={S.secondaryMini} onClick={()=>{setOptionForm(o); setOptionEditMode(true);}}>Edit</button><button style={S.dangerMini} onClick={()=>onDeleteOption(o)}>Delete</button></div></div>)}</div>
+      </div>}
 
-        {ownerTab === "Saved Services" && <div style={S.stack}>
-          <div style={S.row}><button style={S.primaryBtn} onClick={()=>newOption()}>Add Saved Service Option</button><span style={S.muted}>Saved options are quick templates. They do not auto-schedule visits.</span></div>
-          {optionEditMode && <div style={S.detailBox}><OptionForm value={optionForm} onChange={setOptionForm} services={services} pets={ownerPets} /><button style={S.primaryBtn} onClick={()=>{onSaveOption({...optionForm, owner_id:selectedOwnerId}); setOptionEditMode(false);}}>Save Service Option</button></div>}
-          <div style={S.cards}>{options.filter(o=>o.owner_id===selectedOwnerId).map(o=><div key={o.id} style={S.smallCard}><b>{o.option_name}</b><span>{petMap[o.pet_id]?.name || "Owner option"}</span><span>{serviceMap[o.service_id]?.name || "Custom service"}</span><span>{money(o.default_price)} / {o.default_duration_minutes} min</span><div style={S.row}><button style={S.secondaryMini} onClick={()=>{setOptionForm(o); setOptionEditMode(true);}}>Edit</button><button style={S.dangerMini} onClick={()=>onDeleteOption(o)}>Delete</button></div></div>)}</div>
-        </div>}
+      {ownerTab === "Visits" && <div style={S.stack}>
+        <div style={S.grid3}><Metric title="Upcoming" value={ownerVisits.filter(v=>["Scheduled","In Progress"].includes(v.status)).length} sub="scheduled/active" /><Metric title="Completed" value={ownerVisits.filter(v=>v.status==="Completed").length} sub="visit history" /><Metric title="Unpaid" value={money(ownerVisits.filter(v=>v.status==="Completed"&&!v.is_paid).reduce((s,v)=>s+visitChargeTotal(v),0))} sub="completed visits" /></div>
+        {ownerVisits.length ? ownerVisits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onDeleteVisit={onDeleteVisit} />) : <Empty text="No visits yet for this owner." />}
+      </div>}
 
-        {ownerTab === "Visits" && <div style={S.stack}>
-          <div style={S.grid3}><Metric title="Upcoming" value={ownerVisits.filter(v=>["Scheduled","In Progress"].includes(v.status)).length} sub="scheduled/active" /><Metric title="Completed" value={ownerVisits.filter(v=>v.status==="Completed").length} sub="visit history" /><Metric title="Unpaid" value={money(ownerVisits.filter(v=>v.status==="Completed"&&!v.is_paid).reduce((s,v)=>s+visitChargeTotal(v),0))} sub="completed visits" /></div>
-          {ownerVisits.length ? ownerVisits.map(v=><VisitHistoryRow key={v.id} visit={v} service={serviceMap[v.service_id]} pets={visitPetsFor(v, visitPets, petMap)} onDeleteVisit={onDeleteVisit} />) : <Empty text="No visits yet for this owner." />}
-        </div>}
-
-        {ownerTab === "Billing" && <div style={S.stack}>
-          <OwnerBillingSummary owner={selectedOwner} visits={ownerVisits} visitPets={visitPets} petMap={petMap} serviceMap={serviceMap} settings={settings} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onMarkManyPaid={onMarkManyPaid} />
-        </div>}
-      </Panel>}
-    </div>
+      {ownerTab === "Billing" && <div style={S.stack}>
+        <OwnerBillingSummary owner={selectedOwner} visits={ownerVisits} visitPets={visitPets} petMap={petMap} serviceMap={serviceMap} settings={settings} onMarkPaid={onMarkPaid} onMarkUnpaid={onMarkUnpaid} onMarkManyPaid={onMarkManyPaid} />
+      </div>}
+    </Panel>}
   </section>;
 }
 
@@ -2048,6 +2083,13 @@ const S = {
   list:{display:"grid",gap:9,maxHeight:260,overflow:"auto"},
   listBtn:{textAlign:"left",border:"1px solid #dbeafe",background:"#fff",borderRadius:18,padding:13,display:"grid",gap:3},
   listActive:{textAlign:"left",border:"1px solid #0f62fe",background:"linear-gradient(145deg,#eff6ff,#fff7ed)",borderRadius:18,padding:13,display:"grid",gap:3,boxShadow:"0 10px 24px rgba(15,98,254,.13)"},
+  fieldLabel:{display:"block",fontWeight:950,color:"#3f2c1f",marginBottom:4},
+  ownerSelectorGrid:{display:"grid",gap:10},
+  ownerSelectorActions:{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"},
+  ownerFunctionNav:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"2px 0 0"},
+  ownerFunctionBtn:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:850,display:"grid",placeItems:"stretch",minWidth:0,color:"#334155",aspectRatio:"1/1",textAlign:"center",overflow:"visible",position:"relative",boxShadow:"none"},
+  ownerFunctionBtnActive:{border:"0",outline:"3px solid #0f62fe",outlineOffset:0,background:"transparent",borderRadius:22,padding:0,fontWeight:950,color:"#0f62fe",display:"grid",placeItems:"stretch",minWidth:0,aspectRatio:"1/1",textAlign:"center",boxShadow:"0 14px 30px rgba(15,98,254,.16)",overflow:"visible",position:"relative"},
+  ownerFunctionBtnDisabled:{border:"0",background:"transparent",borderRadius:22,padding:0,fontWeight:850,display:"grid",placeItems:"stretch",minWidth:0,color:"#94a3b8",aspectRatio:"1/1",textAlign:"center",overflow:"visible",position:"relative",boxShadow:"none",opacity:.45},
   subTabs:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
   ownerSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
   petSubGrid:{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"10px 0 14px"},
